@@ -93,13 +93,21 @@ SELETORES = {
         (By.XPATH, "//*[contains(.,'IBM Planning Analytics')]"),
         (By.CSS_SELECTOR, "#com\\.ibm\\.bi\\.glass\\.common\\.navmenu"),
     ],
+    # Botao da toolbar do cubo (tooltip visto na Claro: "Exportar para planilha").
+    "botao_exportar_planilha": [
+        (By.XPATH, "//*[@aria-label='Exportar para planilha' or @title='Exportar para planilha']"),
+        (By.XPATH, "//button[contains(@aria-label,'Exportar para planilha') or contains(@title,'Exportar para planilha')]"),
+        (By.XPATH, "//*[contains(@aria-label,'Export to spreadsheet') or contains(@title,'Export to spreadsheet')]"),
+        (By.XPATH, "//button[contains(@aria-label,'planilha') or contains(@title,'planilha')]"),
+        (By.XPATH, "//*[@aria-label='Exportar' or @title='Exportar']"),
+        (By.XPATH, "//button[.//use[contains(@*,'document_export') or contains(@*,'common-download') or contains(@*,'metricsExport')]]"),
+        (By.XPATH, "//*[.//use[contains(@*,'document_export') or contains(@*,'common-download')]]"),
+    ],
     "menu_exportar": [
         (By.XPATH, "//*[self::button or self::span or self::a or self::li or self::div][normalize-space(.)='Exportar' or normalize-space(.)='Export']"),
         (By.XPATH, "//*[contains(@aria-label,'Exportar') or contains(@aria-label,'Export')]"),
         (By.XPATH, "//*[contains(@title,'Exportar') or contains(@title,'Export')]"),
         (By.CSS_SELECTOR, "button[aria-label*='xport']"),
-        (By.XPATH, "//*[.//use[contains(@*,'document_export') or contains(@*,'common-download') or contains(@*,'metricsExport')]]"),
-        (By.XPATH, "//button[.//*[contains(@href,'document_export') or contains(@href,'common-download')]]"),
     ],
     "opcao_excel": [
         (By.XPATH, "//*[self::button or self::span or self::a or self::li or self::div][contains(.,'Excel') or contains(.,'xlsx')]"),
@@ -566,71 +574,58 @@ def _clicar_item_menu_por_texto(driver, textos, timeout: int = 10) -> bool:
 def exportar_para_excel(driver) -> None:
     """
     Exporta a exploration aberta para Excel.
-    No PA da Claro nao ha botao 'Exportar' visivel no HTML estatico; o caminho
-    tipico e: focar a grade do cubo -> menu de contexto / icone export -> Excel.
+    Na Claro o botao da toolbar do cubo e 'Exportar para planilha' (icone download).
     """
     log("Acionando exportacao para Excel...")
     driver.switch_to.default_content()
 
-    # 1) Foca a grade do cubo (TM1MDV / exploration).
-    grade = None
+    # 1) Foca a grade do cubo (traz a toolbar do widget).
     try:
         grade = achar_elemento(driver, "grade_cubo", timeout=15, clicavel=False)
         clicar(driver, grade)
-        time.sleep(1)
-    except TimeoutException:
-        log("Grade do cubo nao localizada; tentando export pelo menu da pagina.")
-
-    # 2) Tenta botao/icone de export direto (se existir na toolbar).
-    try:
-        menu = achar_elemento(driver, "menu_exportar", timeout=5)
-        clicar(driver, menu)
         time.sleep(1.5)
     except TimeoutException:
-        # 3) Fallback: clique direito na grade -> Exportar
-        if grade is not None:
-            log("Abrindo menu de contexto (clique direito) na grade...")
-            try:
-                ActionChains(driver).context_click(grade).perform()
-                time.sleep(1.5)
-            except Exception as e:
-                log(f"Falha no clique direito: {e}")
+        log("Grade do cubo nao localizada; tentando achar o botao de export mesmo assim.")
 
-        if not _clicar_item_menu_por_texto(driver, ["exportar", "export"], timeout=8):
-            # 4) Ultimo recurso: botao "Ação"/share da action bar
-            for xp in [
-                "//button[@id='com.ibm.ca.collaboration.share']",
-                "//*[@aria-label='Ação' or @aria-label='Acao' or contains(@aria-label,'Share')]",
-            ]:
-                els = driver.find_elements(By.XPATH, xp)
-                if els:
-                    clicar(driver, els[0])
-                    time.sleep(1.5)
-                    break
-            if not _clicar_item_menu_por_texto(driver, ["exportar", "export"], timeout=8):
-                raise TimeoutException(
-                    "Nao encontrei o menu/opcao de Exportar na view aberta."
-                )
-
-    # Escolhe Excel (se submenu aparecer).
-    if _clicar_item_menu_por_texto(driver, ["excel", "xlsx"], timeout=8):
-        time.sleep(2)
-    else:
-        log("Opcao 'Excel' nao apareceu; a exportacao pode ja ter iniciado.")
-
-    # Confirma dialogo ExportExcelDialog / ExportView, se houver.
+    # 2) Caminho principal: botao "Exportar para planilha".
     try:
-        confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=8)
+        botao = achar_elemento(driver, "botao_exportar_planilha", timeout=20)
+        log("Clicando em 'Exportar para planilha'...")
+        clicar(driver, botao)
+        time.sleep(3)
+    except TimeoutException:
+        # 3) Fallback: clique direito -> Exportar
+        log("Botao 'Exportar para planilha' nao encontrado; tentando menu de contexto...")
+        try:
+            grade = achar_elemento(driver, "grade_cubo", timeout=5, clicavel=False)
+            ActionChains(driver).context_click(grade).perform()
+            time.sleep(1.5)
+        except Exception as e:
+            log(f"Falha no clique direito: {e}")
+        if not _clicar_item_menu_por_texto(
+            driver, ["exportar para planilha", "exportar", "export"], timeout=8
+        ):
+            raise TimeoutException(
+                "Nao encontrei o botao/menu 'Exportar para planilha' na view aberta."
+            )
+
+    # Se abrir submenu/dialog, escolhe Excel e confirma.
+    if _clicar_item_menu_por_texto(driver, ["excel", "xlsx", "planilha"], timeout=5):
+        time.sleep(2)
+    try:
+        confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=6)
         clicar(driver, confirmar)
         time.sleep(2)
     except TimeoutException:
         pass
+    log("Exportacao acionada; aguardando arquivo baixar.")
 
 
 def aguardar_download(pasta: Path, arquivos_antes: set, timeout: int) -> Path:
     """Espera um arquivo novo terminar de baixar na pasta de downloads."""
-    log("Aguardando download terminar...")
+    log(f"Aguardando download terminar (ate {timeout}s) em: {pasta}")
     fim = time.time() + timeout
+    ultimo_ping = 0
     while time.time() < fim:
         atuais = {p for p in pasta.iterdir() if p.is_file()}
         novos = [
@@ -643,8 +638,15 @@ def aguardar_download(pasta: Path, arquivos_antes: set, timeout: int) -> Path:
             time.sleep(2)  # margem para o SO liberar o arquivo
             log(f"Download concluido: {arquivo.name}")
             return arquivo
+        decorrido = int(timeout - (fim - time.time()))
+        if decorrido - ultimo_ping >= 15:
+            ultimo_ping = decorrido
+            log(f"... ainda aguardando ({decorrido}s) — baixando={len(baixando)} novos={len(novos)}")
         time.sleep(2)
-    raise TimeoutException("Tempo esgotado aguardando o download do arquivo.")
+    raise TimeoutException(
+        f"Tempo esgotado aguardando o download do arquivo em {pasta}. "
+        "Verifique se o botao 'Exportar para planilha' realmente iniciou o download."
+    )
 
 
 def mover_para_destino(arquivo: Path, job: dict, pasta_backup: Path) -> Path:
