@@ -29,6 +29,7 @@ from pathlib import Path
 
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
@@ -55,15 +56,23 @@ SELETORES = {
         (By.XPATH, "//*[self::a or self::button or self::span or self::div][normalize-space(.)='Compartilhado']"),
         (By.XPATH, "//*[contains(@aria-label,'Compartilhado')]"),
         (By.XPATH, "//*[contains(@class,'create-menu-link')][contains(.,'Compartilhado')]"),
+        (By.XPATH, "//*[contains(.,'Conteúdo compartilhado') or contains(.,'Conteudo compartilhado')]"),
+        (By.XPATH, "//*[contains(.,'Pasta compartilhada') or contains(.,'Arquivos compartilhados')]"),
         (By.XPATH, "//*[self::a or self::button or self::span][normalize-space(.)='Shared']"),
-        (By.XPATH, "//*[contains(text(),'Compartilhado')]"),
+        (By.XPATH, "//*[contains(text(),'Compartilhado') or contains(text(),'Shared')]"),
+    ],
+    "card_aplicativos": [
+        (By.XPATH, "//*[contains(.,'Aplicativos e planos')]"),
+        (By.XPATH, "//*[contains(.,'Apps and plans')]"),
     ],
     "aba_favoritos": [
+        (By.CSS_SELECTOR, "#tab-favorites"),
         (By.XPATH, "//*[@role='tab' and (normalize-space(.)='Favoritos' or @title='Favoritos')]"),
-        (By.XPATH, "//button[normalize-space(.)='Favoritos']"),
+        (By.XPATH, "//button[normalize-space(.)='Favoritos' or @id='tab-favorites']"),
         (By.XPATH, "//*[@title='Favoritos']"),
     ],
     "aba_recentes": [
+        (By.CSS_SELECTOR, "#tab-recents, #tab-recent"),
         (By.XPATH, "//*[@role='tab' and (normalize-space(.)='Recentes' or @title='Recentes')]"),
         (By.XPATH, "//button[normalize-space(.)='Recentes']"),
         (By.XPATH, "//*[@title='Recentes']"),
@@ -85,18 +94,31 @@ SELETORES = {
         (By.CSS_SELECTOR, "#com\\.ibm\\.bi\\.glass\\.common\\.navmenu"),
     ],
     "menu_exportar": [
-        (By.XPATH, "//*[self::button or self::span or self::a][contains(., 'Exportar')]"),
-        (By.XPATH, "//*[self::button or self::span or self::a][contains(., 'Export')]"),
+        (By.XPATH, "//*[self::button or self::span or self::a or self::li or self::div][normalize-space(.)='Exportar' or normalize-space(.)='Export']"),
+        (By.XPATH, "//*[contains(@aria-label,'Exportar') or contains(@aria-label,'Export')]"),
+        (By.XPATH, "//*[contains(@title,'Exportar') or contains(@title,'Export')]"),
         (By.CSS_SELECTOR, "button[aria-label*='xport']"),
+        (By.XPATH, "//*[.//use[contains(@*,'document_export') or contains(@*,'common-download') or contains(@*,'metricsExport')]]"),
+        (By.XPATH, "//button[.//*[contains(@href,'document_export') or contains(@href,'common-download')]]"),
     ],
     "opcao_excel": [
+        (By.XPATH, "//*[self::button or self::span or self::a or self::li or self::div][contains(.,'Excel') or contains(.,'xlsx')]"),
+        (By.XPATH, "//*[contains(@aria-label,'Excel') or contains(@title,'Excel')]"),
         (By.XPATH, "//*[contains(text(), 'Excel')]"),
         (By.XPATH, "//*[contains(text(), 'xlsx')]"),
     ],
     "confirmar_exportacao": [
+        (By.XPATH, "//div[contains(@id,'ExportExcelDialog') or contains(@class,'ExportView')]//button[contains(.,'Exportar') or contains(.,'Export') or contains(.,'OK')]"),
         (By.XPATH, "//button[contains(., 'Exportar')]"),
         (By.XPATH, "//button[contains(., 'OK')]"),
         (By.XPATH, "//button[contains(., 'Export')]"),
+    ],
+    "grade_cubo": [
+        (By.CSS_SELECTOR, "[class*='TM1MDV']"),
+        (By.CSS_SELECTOR, "[class*='cubeViewer'], [class*='CubeViewer']"),
+        (By.CSS_SELECTOR, "[class*='exploration'], [class*='Exploration']"),
+        (By.XPATH, "//*[contains(@class,'grid') or contains(@class,'tigre')]"),
+        (By.CSS_SELECTOR, "canvas"),
     ],
 }
 
@@ -258,11 +280,13 @@ def achar_campo_pesquisa(driver, timeout: int = 20):
     )
 
 
-def salvar_debug(driver, pasta: Path, rotulo: str) -> Path:
+def salvar_debug(driver, pasta: Path, rotulo: str, erro: str | None = None) -> Path:
     """Salva screenshot + lista de inputs + HTML para diagnostico."""
     pasta.mkdir(parents=True, exist_ok=True)
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = pasta / f"debug_{rotulo}_{ts}"
+    # Evita caracteres invalidos no Windows (ex.: parenteses no nome da exportacao).
+    seguro = "".join(c if c.isalnum() or c in "-_." else "_" for c in rotulo)[:60]
+    base = pasta / f"debug_{seguro}_{ts}"
     try:
         driver.switch_to.default_content()
         driver.save_screenshot(str(base.with_suffix(".png")))
@@ -275,6 +299,7 @@ def salvar_debug(driver, pasta: Path, rotulo: str) -> Path:
             "url": driver.current_url,
             "title": driver.title,
             "iframes": len(iframes),
+            "erro": erro,
             "inputs": inputs,
         }
         base.with_suffix(".json").write_text(
@@ -384,15 +409,48 @@ def abrir_compartilhado(driver, pasta_debug: Path | None = None) -> None:
         raise
 
 
-def pesquisar_e_abrir(driver, nome_busca: str, pasta_debug: Path | None = None) -> None:
-    """Abre a view: primeiro tenta tile na home; senao pesquisa no Compartilhado."""
+def abrir_por_dashboard_id(driver, base_url: str, dashboard_id: str) -> bool:
+    """Abre a view direto pela URL do dashboard (mais estavel que tile/pesquisa)."""
+    if not dashboard_id:
+        return False
+    # Ex.: https://host:9443/?perspective=pa-home -> .../?perspective=dashboard&id=...
+    root = base_url.split("?")[0].rstrip("/")
+    url = f"{root}/?perspective=dashboard&id={dashboard_id}"
+    log(f"Abrindo dashboard direto: {url}")
+    driver.get(url)
+    time.sleep(12)
+    if "perspective=dashboard" in driver.current_url:
+        return True
+    return False
+
+
+def pesquisar_e_abrir(
+    driver,
+    nome_busca: str,
+    pasta_debug: Path | None = None,
+    dashboard_id: str | None = None,
+    base_url: str | None = None,
+) -> None:
+    """Abre a view: URL direta > tile na home > pesquisa no Compartilhado."""
     log(f"Abrindo view: {nome_busca}")
+
+    if dashboard_id and base_url and abrir_por_dashboard_id(driver, base_url, dashboard_id):
+        log("View aberta via dashboard_id.")
+        return
 
     if abrir_por_tile(driver, nome_busca):
         log("View aberta via tile da home.")
         return
 
     log("Tile nao encontrado na home; indo para Compartilhado...")
+    # Atalho: card "Aplicativos e planos" às vezes leva ao browser de conteudo.
+    try:
+        card = achar_elemento(driver, "card_aplicativos", timeout=5)
+        clicar(driver, card)
+        time.sleep(4)
+    except TimeoutException:
+        pass
+
     abrir_compartilhado(driver, pasta_debug=pasta_debug)
 
     log(f"Pesquisando: {nome_busca}")
@@ -479,21 +537,92 @@ def xpath_literal(texto: str) -> str:
     return "concat(" + ", \"'\", ".join(f"'{p}'" for p in partes) + ")"
 
 
+def _clicar_item_menu_por_texto(driver, textos, timeout: int = 10) -> bool:
+    """Clica no primeiro item de menu/contexto cujo texto contenha um dos textos."""
+    fim = time.time() + timeout
+    while time.time() < fim:
+        for texto in textos:
+            xp = (
+                "//*[self::button or self::span or self::a or self::li or self::div]"
+                f"[contains(translate(normalize-space(.),"
+                f"'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'), '{texto.lower()}')]"
+            )
+            for el in driver.find_elements(By.XPATH, xp):
+                try:
+                    if not el.is_displayed():
+                        continue
+                    t = (el.text or el.get_attribute("aria-label") or "").strip()
+                    if not t:
+                        continue
+                    clicar(driver, el)
+                    log(f"Clique em menu: {t}")
+                    return True
+                except Exception:
+                    continue
+        time.sleep(0.5)
+    return False
+
+
 def exportar_para_excel(driver) -> None:
-    """Aciona a exportacao para Excel na view aberta."""
+    """
+    Exporta a exploration aberta para Excel.
+    No PA da Claro nao ha botao 'Exportar' visivel no HTML estatico; o caminho
+    tipico e: focar a grade do cubo -> menu de contexto / icone export -> Excel.
+    """
     log("Acionando exportacao para Excel...")
-    menu = achar_elemento(driver, "menu_exportar", timeout=30)
-    menu.click()
-    time.sleep(2)
+    driver.switch_to.default_content()
+
+    # 1) Foca a grade do cubo (TM1MDV / exploration).
+    grade = None
     try:
-        opcao = achar_elemento(driver, "opcao_excel", timeout=10)
-        opcao.click()
-        time.sleep(2)
+        grade = achar_elemento(driver, "grade_cubo", timeout=15, clicavel=False)
+        clicar(driver, grade)
+        time.sleep(1)
     except TimeoutException:
-        log("Opcao 'Excel' nao apareceu; seguindo (a exportacao pode ja ter iniciado).")
+        log("Grade do cubo nao localizada; tentando export pelo menu da pagina.")
+
+    # 2) Tenta botao/icone de export direto (se existir na toolbar).
     try:
-        confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=5)
-        confirmar.click()
+        menu = achar_elemento(driver, "menu_exportar", timeout=5)
+        clicar(driver, menu)
+        time.sleep(1.5)
+    except TimeoutException:
+        # 3) Fallback: clique direito na grade -> Exportar
+        if grade is not None:
+            log("Abrindo menu de contexto (clique direito) na grade...")
+            try:
+                ActionChains(driver).context_click(grade).perform()
+                time.sleep(1.5)
+            except Exception as e:
+                log(f"Falha no clique direito: {e}")
+
+        if not _clicar_item_menu_por_texto(driver, ["exportar", "export"], timeout=8):
+            # 4) Ultimo recurso: botao "Ação"/share da action bar
+            for xp in [
+                "//button[@id='com.ibm.ca.collaboration.share']",
+                "//*[@aria-label='Ação' or @aria-label='Acao' or contains(@aria-label,'Share')]",
+            ]:
+                els = driver.find_elements(By.XPATH, xp)
+                if els:
+                    clicar(driver, els[0])
+                    time.sleep(1.5)
+                    break
+            if not _clicar_item_menu_por_texto(driver, ["exportar", "export"], timeout=8):
+                raise TimeoutException(
+                    "Nao encontrei o menu/opcao de Exportar na view aberta."
+                )
+
+    # Escolhe Excel (se submenu aparecer).
+    if _clicar_item_menu_por_texto(driver, ["excel", "xlsx"], timeout=8):
+        time.sleep(2)
+    else:
+        log("Opcao 'Excel' nao apareceu; a exportacao pode ja ter iniciado.")
+
+    # Confirma dialogo ExportExcelDialog / ExportView, se houver.
+    try:
+        confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=8)
+        clicar(driver, confirmar)
+        time.sleep(2)
     except TimeoutException:
         pass
 
@@ -583,7 +712,9 @@ def main() -> int:
                 pesquisar_e_abrir(
                     driver,
                     job["nome_busca"],
-                    pasta_debug=pasta_debug if args.debug else pasta_debug,
+                    pasta_debug=pasta_debug,
+                    dashboard_id=job.get("dashboard_id"),
+                    base_url=cfg["url"],
                 )
                 exportar_para_excel(driver)
                 arquivo = aguardar_download(
@@ -600,7 +731,12 @@ def main() -> int:
             except Exception as e:
                 log(f"ERRO em '{job['nome']}': {e}")
                 resultados.append((job["nome"], f"ERRO: {e}"))
-                salvar_debug(driver, pasta_debug, job["nome"].replace("/", "-")[:40])
+                salvar_debug(
+                    driver,
+                    pasta_debug,
+                    job["nome"].replace("/", "-")[:40],
+                    erro=str(e),
+                )
                 if args.debug:
                     log("Modo --debug: navegador permanece aberto. Pressione ENTER neste terminal para encerrar.")
                     try:
