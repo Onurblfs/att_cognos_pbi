@@ -607,17 +607,74 @@ def desligar_modo_editar(driver) -> None:
         log(f"Nao foi possivel desligar Editar: {e}")
 
 
+def _clicar_cabecalho_widget_cubo(driver) -> bool:
+    """
+    Clica na area branca a direita do texto
+    'Visualização do cubo Banco de dados: ...'
+    — e ali que a toolbar on-demand (Exportar para planilha) aparece.
+    """
+    candidatos = driver.find_elements(
+        By.XPATH,
+        "//*[contains(@aria-label,'Visualização do cubo') or contains(@aria-label,'Visualizacao do cubo') "
+        "or contains(.,'Visualização do cubo') or contains(.,'Visualizacao do cubo') "
+        "or contains(.,'Banco de dados:')]",
+    )
+    for el in candidatos:
+        try:
+            if not el.is_displayed():
+                continue
+            # Sobe para um container largo o bastante (barra do widget).
+            alvo = el
+            for _ in range(6):
+                pai = alvo.find_element(By.XPATH, "..")
+                try:
+                    w = pai.size.get("width", 0) or 0
+                    if w > 400:
+                        alvo = pai
+                        break
+                except Exception:
+                    break
+                alvo = pai
+
+            # Clica no lado direito da barra (onde o icone de export aparece).
+            largura = alvo.size.get("width", 0) or 0
+            altura = alvo.size.get("height", 0) or 0
+            if largura < 50:
+                continue
+            offset_x = max(int(largura * 0.75), 40)
+            offset_y = max(int(altura / 2), 5)
+            # move_to_element_with_offset usa centro do elemento; ajustamos a partir do centro.
+            dx = offset_x - int(largura / 2)
+            dy = offset_y - int(altura / 2)
+            log("Clicando na area do cabecalho do cubo para revelar a toolbar de export...")
+            ActionChains(driver).move_to_element_with_offset(alvo, dx, dy).click().perform()
+            time.sleep(1.5)
+            return True
+        except Exception:
+            continue
+    return False
+
+
 def focar_widget_cubo(driver) -> None:
-    """Seleciona o widget do cubo para exibir a OnDemandToolbar."""
+    """Seleciona o widget do cubo para exibir a OnDemandToolbar (Exportar para planilha)."""
+    if _clicar_cabecalho_widget_cubo(driver):
+        return
     try:
-        widget = achar_elemento(driver, "widget_cubo", timeout=10, clicavel=False)
-        clicar(driver, widget)
+        widget = achar_elemento(driver, "widget_cubo", timeout=8, clicavel=False)
+        # Clique deslocado para a direita do titulo (area branca do print).
+        try:
+            w = widget.size.get("width", 200) or 200
+            ActionChains(driver).move_to_element_with_offset(
+                widget, int(w * 0.35), 0
+            ).click().perform()
+        except Exception:
+            clicar(driver, widget)
         time.sleep(1.5)
         return
     except TimeoutException:
         pass
     try:
-        grade = achar_elemento(driver, "grade_cubo", timeout=10, clicavel=False)
+        grade = achar_elemento(driver, "grade_cubo", timeout=8, clicavel=False)
         clicar(driver, grade)
         time.sleep(1.5)
     except TimeoutException:
@@ -661,25 +718,25 @@ def achar_botao_exportar_planilha_js(driver):
 def exportar_para_excel(driver) -> None:
     """
     Exporta a exploration aberta para Excel.
-    Na Claro: desliga Editar -> seleciona o cubo -> clica 'Exportar para planilha'.
+    Na Claro o botao so aparece DEPOIS de clicar na area branca do cabecalho
+    do widget do cubo (OnDemandToolbar).
     """
     log("Acionando exportacao para Excel...")
     driver.switch_to.default_content()
 
     desligar_modo_editar(driver)
-    focar_widget_cubo(driver)
 
     botao = None
-    fim = time.time() + 25
-    while time.time() < fim and botao is None:
+    for tentativa in range(1, 5):
+        log(f"Revelando toolbar do cubo (tentativa {tentativa}/4)...")
+        focar_widget_cubo(driver)
+        time.sleep(1)
         try:
-            botao = achar_elemento(driver, "botao_exportar_planilha", timeout=2)
+            botao = achar_elemento(driver, "botao_exportar_planilha", timeout=3)
         except TimeoutException:
             botao = achar_botao_exportar_planilha_js(driver)
-        if botao is None:
-            # Re-foca o widget; a toolbar on-demand às vezes some.
-            focar_widget_cubo(driver)
-            time.sleep(1)
+        if botao is not None:
+            break
 
     if botao is None:
         log("Botao nao apareceu; tentando menu de contexto na grade...")
@@ -694,8 +751,9 @@ def exportar_para_excel(driver) -> None:
             timeout=8,
         ):
             raise TimeoutException(
-                "Nao encontrei o botao/menu 'Exportar para planilha' na view aberta. "
-                "Confirme que o modo Editar esta desligado e o cubo esta selecionado."
+                "Nao encontrei o botao/menu 'Exportar para planilha'. "
+                "Clique manualmente na area branca a direita de "
+                "'Visualização do cubo...' para revelar a toolbar."
             )
     else:
         log("Clicando em 'Exportar para planilha'...")
