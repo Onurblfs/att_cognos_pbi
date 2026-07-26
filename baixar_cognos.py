@@ -908,6 +908,37 @@ def aguardar_download(pasta: Path, arquivos_antes: set, timeout: int) -> Path:
     )
 
 
+def nome_arquivo_final(job: dict, arquivo: Path) -> str:
+    """
+    Nome final = nome da pasta compartilhada (nome_busca) + extensao.
+    Ex.: 'Receita DRE PowerBI V2 (irat950).xlsx'
+    """
+    configurado = job.get("nome_arquivo_destino")
+    if configurado:
+        return configurado
+    ext = arquivo.suffix.lower() if arquivo.suffix else ".xlsx"
+    if ext not in EXTENSOES_VALIDAS:
+        ext = ".xlsx"
+    base = (job.get("nome_busca") or job.get("nome") or arquivo.stem).strip()
+    # Remove extensao se ja vier no nome_busca.
+    if Path(base).suffix.lower() in EXTENSOES_VALIDAS:
+        return base
+    return f"{base}{ext}"
+
+
+def renomear_download(arquivo: Path, job: dict) -> Path:
+    """Renomeia o arquivo baixado para o nome da view compartilhada."""
+    nome = nome_arquivo_final(job, arquivo)
+    destino = arquivo.with_name(nome)
+    if destino.resolve() == arquivo.resolve():
+        return arquivo
+    if destino.exists():
+        destino.unlink()
+    arquivo.rename(destino)
+    log(f"Arquivo renomeado para: {destino.name}")
+    return destino
+
+
 def mover_para_destino(arquivo: Path, job: dict, pasta_backup: Path) -> Path:
     """Move o arquivo baixado para a pasta de rede, com backup do anterior."""
     destino_dir = Path(job["pasta_destino"])
@@ -917,7 +948,7 @@ def mover_para_destino(arquivo: Path, job: dict, pasta_backup: Path) -> Path:
             "Verifique a conexao com a rede corporativa (VPN)."
         )
 
-    nome_final = job.get("nome_arquivo_destino") or arquivo.name
+    nome_final = nome_arquivo_final(job, arquivo)
     destino = destino_dir / nome_final
 
     if destino.exists():
@@ -985,6 +1016,7 @@ def main() -> int:
                 arquivo = aguardar_download(
                     pasta_downloads, arquivos_antes, cfg["timeout_download_segundos"]
                 )
+                arquivo = renomear_download(arquivo, job)
                 if args.sem_mover:
                     log(f"(--sem-mover) Arquivo mantido em: {arquivo}")
                 else:
