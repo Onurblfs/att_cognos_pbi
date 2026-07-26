@@ -139,6 +139,145 @@ def clicar(driver, elemento) -> None:
         driver.execute_script("arguments[0].click();", elemento)
 
 
+def listar_inputs_visiveis(driver) -> list:
+    """Lista inputs na pagina (inclui shadow DOM). Util para debug."""
+    script = """
+    const out = [];
+    function walk(root, path) {
+      root.querySelectorAll('input, textarea').forEach((el, i) => {
+        out.push({
+          path: path + '/' + el.tagName.toLowerCase() + '[' + i + ']',
+          type: el.type || '',
+          placeholder: el.placeholder || '',
+          aria: el.getAttribute('aria-label') || '',
+          name: el.name || '',
+          id: el.id || '',
+          visible: !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)
+        });
+      });
+      root.querySelectorAll('*').forEach((el) => {
+        if (el.shadowRoot) walk(el.shadowRoot, path + '/' + (el.tagName || 'shadow'));
+      });
+    }
+    walk(document, 'doc');
+    return out;
+    """
+    try:
+        return driver.execute_script(script) or []
+    except Exception:
+        return []
+
+
+def achar_input_por_js(driver, textos=("pesquisar", "search", "esquis")):
+    """Encontra input pelo placeholder/aria, inclusive dentro de shadow DOM."""
+    script = """
+    const textos = arguments[0].map(t => t.toLowerCase());
+    function match(el) {
+      const p = (el.placeholder || '').toLowerCase();
+      const a = (el.getAttribute('aria-label') || '').toLowerCase();
+      const t = (el.type || '').toLowerCase();
+      if (t === 'hidden') return false;
+      return textos.some(x => p.includes(x) || a.includes(x)) || t === 'search';
+    }
+    function walk(root) {
+      const inputs = root.querySelectorAll('input, textarea');
+      for (const el of inputs) {
+        if (match(el)) return el;
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot) {
+          const found = walk(el.shadowRoot);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+    return walk(document);
+    """
+    return driver.execute_script(script, list(textos))
+
+
+def com_iframes(driver, fn):
+    """
+    Executa fn(driver) no documento principal e em cada iframe.
+    Retorna o primeiro resultado nao-nulo. Volta sempre ao default_content.
+    """
+    driver.switch_to.default_content()
+    try:
+        resultado = fn(driver)
+        if resultado is not None:
+            return resultado
+    except Exception:
+        pass
+
+    iframes = driver.find_elements(By.TAG_NAME, "iframe")
+    for idx, frame in enumerate(iframes):
+        try:
+            driver.switch_to.default_content()
+            driver.switch_to.frame(frame)
+            resultado = fn(driver)
+            if resultado is not None:
+                log(f"Elemento encontrado no iframe[{idx}].")
+                return resultado
+        except Exception:
+            continue
+
+    driver.switch_to.default_content()
+    return None
+
+
+def achar_campo_pesquisa(driver, timeout: int = 20):
+    """Localiza o campo Pesquisar no PA (documento, iframes e shadow DOM)."""
+    fim = time.time() + timeout
+    while time.time() < fim:
+        def tentar(_drv):
+            try:
+                return achar_elemento(_drv, "campo_pesquisa", timeout=2, clicavel=False)
+            except TimeoutException:
+                return achar_input_por_js(_drv)
+
+        el = com_iframes(driver, tentar)
+        if el is not None:
+            return el
+        time.sleep(1)
+    raise TimeoutException(
+        "Nao encontrei o elemento 'campo_pesquisa'. "
+        "Os seletores em SELETORES provavelmente precisam de ajuste para esta versao do PA."
+    )
+
+
+def salvar_debug(driver, pasta: Path, rotulo: str) -> Path:
+    """Salva screenshot + lista de inputs + HTML para diagnostico."""
+    pasta.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = pasta / f"debug_{rotulo}_{ts}"
+    try:
+        driver.switch_to.default_content()
+        driver.save_screenshot(str(base.with_suffix(".png")))
+    except Exception as e:
+        log(f"Falha ao salvar screenshot: {e}")
+    try:
+        inputs = listar_inputs_visiveis(driver)
+        iframes = driver.find_elements(By.TAG_NAME, "iframe")
+        relatorio = {
+            "url": driver.current_url,
+            "title": driver.title,
+            "iframes": len(iframes),
+            "inputs": inputs,
+        }
+        base.with_suffix(".json").write_text(
+            json.dumps(relatorio, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        log(f"Debug salvo em: {base.with_suffix('.json')} ({len(inputs)} inputs, {len(iframes)} iframes)")
+    except Exception as e:
+        log(f"Falha ao salvar debug JSON: {e}")
+    try:
+        base.with_suffix(".html").write_text(driver.page_source, encoding="utf-8")
+    except Exception:
+        pass
+    return base
+
+
 def aguardar_login(driver, timeout: int) -> None:
     """Espera ate a home do PA carregar (apos login manual/SSO)."""
     log("Aguardando login... Se aparecer a tela de login, entre com seu usuario.")
@@ -156,11 +295,10 @@ def aguardar_login(driver, timeout: int) -> None:
     raise TimeoutException("Tempo esgotado aguardando o login no Planning Analytics.")
 
 
-def abrir_compartilhado(driver) -> None:
+def abrir_compartilhado(driver, pasta_debug: Path | None = None) -> None:
     """Garante que a sidebar Compartilhado (com o campo Pesquisar) esteja aberta."""
-    # Se o campo Pesquisar ja esta visivel, estamos no lugar certo.
     try:
-        achar_elemento(driver, "campo_pesquisa", timeout=3, clicavel=False)
+        achar_campo_pesquisa(driver, timeout=3)
         log("Sidebar Compartilhado ja aberta.")
         return
     except TimeoutException:
@@ -174,25 +312,37 @@ def abrir_compartilhado(driver) -> None:
     except TimeoutException:
         log("Menu hamburguer nao encontrado; tentando link Compartilhado direto.")
 
-    link = achar_elemento(driver, "link_compartilhado", timeout=20)
-    clicar(driver, link)
-    time.sleep(3)
+    try:
+        link = achar_elemento(driver, "link_compartilhado", timeout=20)
+        clicar(driver, link)
+        time.sleep(3)
+    except TimeoutException:
+        if pasta_debug is not None:
+            salvar_debug(driver, pasta_debug, "sem_compartilhado")
+        raise
 
-    # Confirma que o campo Pesquisar apareceu.
-    achar_elemento(driver, "campo_pesquisa", timeout=20, clicavel=False)
-    log("Compartilhado aberto.")
+    try:
+        achar_campo_pesquisa(driver, timeout=20)
+        log("Compartilhado aberto.")
+    except TimeoutException:
+        if pasta_debug is not None:
+            salvar_debug(driver, pasta_debug, "sem_campo_pesquisa")
+        raise
 
 
-def pesquisar_e_abrir(driver, nome_busca: str) -> None:
+def pesquisar_e_abrir(driver, nome_busca: str, pasta_debug: Path | None = None) -> None:
     """Abre Compartilhado, pesquisa a view e clica no resultado."""
-    abrir_compartilhado(driver)
+    abrir_compartilhado(driver, pasta_debug=pasta_debug)
 
     log(f"Pesquisando: {nome_busca}")
-    campo = achar_elemento(driver, "campo_pesquisa", timeout=20)
+    campo = achar_campo_pesquisa(driver, timeout=20)
     clicar(driver, campo)
     # Limpa o campo de forma robusta (clear() às vezes falha em inputs React).
-    campo.send_keys(Keys.CONTROL, "a")
-    campo.send_keys(Keys.BACKSPACE)
+    try:
+        campo.send_keys(Keys.CONTROL, "a")
+        campo.send_keys(Keys.BACKSPACE)
+    except Exception:
+        driver.execute_script("arguments[0].value=''; arguments[0].dispatchEvent(new Event('input',{bubbles:true}));", campo)
     time.sleep(0.3)
     campo.send_keys(nome_busca)
     time.sleep(1)
@@ -336,11 +486,14 @@ def main() -> int:
                         help="Executa apenas exportacoes cujo nome contenha este texto.")
     parser.add_argument("--sem-mover", action="store_true",
                         help="Baixa os arquivos mas nao copia para a pasta de rede.")
+    parser.add_argument("--debug", action="store_true",
+                        help="Salva screenshot/HTML/inputs quando falhar e para no 1o erro.")
     args = parser.parse_args()
 
     cfg = carregar_config(Path(args.config))
     pasta_downloads = BASE_DIR / cfg["pasta_downloads"]
     pasta_backup = BASE_DIR / cfg["pasta_backup"]
+    pasta_debug = BASE_DIR / "debug"
     pasta_downloads.mkdir(parents=True, exist_ok=True)
 
     jobs = cfg["exportacoes"]
@@ -363,7 +516,11 @@ def main() -> int:
             log(f"Exportacao: {job['nome']}  (servidor {job['servidor']})")
             try:
                 arquivos_antes = {p for p in pasta_downloads.iterdir() if p.is_file()}
-                pesquisar_e_abrir(driver, job["nome_busca"])
+                pesquisar_e_abrir(
+                    driver,
+                    job["nome_busca"],
+                    pasta_debug=pasta_debug if args.debug else pasta_debug,
+                )
                 exportar_para_excel(driver)
                 arquivo = aguardar_download(
                     pasta_downloads, arquivos_antes, cfg["timeout_download_segundos"]
@@ -376,6 +533,14 @@ def main() -> int:
             except Exception as e:
                 log(f"ERRO em '{job['nome']}': {e}")
                 resultados.append((job["nome"], f"ERRO: {e}"))
+                salvar_debug(driver, pasta_debug, job["nome"].replace("/", "-")[:40])
+                if args.debug:
+                    log("Modo --debug: navegador permanece aberto. Pressione ENTER neste terminal para encerrar.")
+                    try:
+                        input()
+                    except EOFError:
+                        time.sleep(60)
+                    break
                 # Volta para a home para tentar a proxima exportacao.
                 driver.get(cfg["url"])
                 time.sleep(8)

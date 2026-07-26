@@ -1,6 +1,7 @@
 # Downloads e backups locais (podem conter dados sensíveis)
 downloads/
 backup/
+debug/
 
 # Python
 __pycache__/
