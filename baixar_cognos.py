@@ -123,10 +123,11 @@ SELETORES = {
         (By.XPATH, "//button[contains(@aria-label,'Exportar para planilha') or contains(@title,'Exportar para planilha')]"),
         (By.XPATH, "//*[contains(@aria-label,'Export to spreadsheet') or contains(@title,'Export to spreadsheet')]"),
         (By.XPATH, "//*[contains(@aria-label,'planilha') or contains(@title,'planilha')]"),
-        (By.XPATH, "//button[.//span[contains(@class,'assistive') and contains(.,'planilha')]]"),
-        (By.XPATH, "//button[.//span[contains(@class,'assistive') and contains(.,'Exportar')]]"),
-        (By.XPATH, "//*[contains(@class,'OnDemandToolbar') or contains(@class,'toolbarDock')]//button"),
-        (By.XPATH, "//button[.//use[contains(@*,'document_export') or contains(@*,'common-download') or contains(@*,'metricsExport')]]"),
+        (By.XPATH, "//button[.//span[contains(@class,'assistive') and (contains(.,'planilha') or contains(.,'Exportar') or contains(.,'Download'))]]"),
+        # Toolbar flutuante no canto superior direito da grade (views NET_PLAN_UF / REV.*).
+        (By.XPATH, "//button[.//use[contains(@*,'document_export') or contains(@*,'common-download') or contains(@*,'metricsExport') or contains(@*,'download')]]"),
+        (By.XPATH, "//*[contains(@class,'OnDemandToolbar') or contains(@class,'toolbarDock') or contains(@class,'widgetToolbar')]//button[.//use[contains(@*,'download') or contains(@*,'export')]]"),
+        (By.CSS_SELECTOR, "[class*='OnDemandToolbar'] button, [class*='toolbarDock'] button, [class*='widget-toolbar'] button"),
     ],
     "toggle_editar": [
         (By.CSS_SELECTOR, "input[id*='editToggleButton']"),
@@ -712,110 +713,163 @@ def desligar_modo_editar(driver) -> None:
         log(f"Nao foi possivel desligar Editar: {e}")
 
 
-def _clicar_cabecalho_widget_cubo(driver) -> bool:
+def _container_widget(el):
+    """Sobe na arvore ate achar um container largo (barra/widget)."""
+    alvo = el
+    for _ in range(8):
+        try:
+            pai = alvo.find_element(By.XPATH, "..")
+            w = pai.size.get("width", 0) or 0
+            h = pai.size.get("height", 0) or 0
+            if w > 400 and h > 40:
+                alvo = pai
+                if h > 200:  # provavelmente o widget inteiro
+                    return alvo
+            alvo = pai
+        except Exception:
+            break
+    return alvo
+
+
+def _clicar_offset_no_elemento(driver, el, frac_x: float, frac_y: float, rotulo: str) -> bool:
+    """Clica em uma posicao relativa dentro do elemento (0..1)."""
+    try:
+        if not el.is_displayed():
+            return False
+        w = el.size.get("width", 0) or 0
+        h = el.size.get("height", 0) or 0
+        if w < 40 or h < 10:
+            return False
+        # move_to_element_with_offset e relativo ao centro.
+        dx = int(w * (frac_x - 0.5))
+        dy = int(h * (frac_y - 0.5))
+        log(f"Clicando para revelar toolbar ({rotulo})...")
+        ActionChains(driver).move_to_element_with_offset(el, dx, dy).pause(0.2).click().perform()
+        time.sleep(1.2)
+        return True
+    except Exception:
+        return False
+
+
+def revelar_toolbar_export(driver, estrategia: int = 0) -> bool:
     """
-    Clica na area branca a direita do texto
-    'Visualização do cubo Banco de dados: ...'
-    — e ali que a toolbar on-demand (Exportar para planilha) aparece.
+    Revela a toolbar on-demand do cubo.
+    Views ACOMPANHAMENTO (IRAT/FIS): area branca a direita do titulo.
+    Views NET_PLAN_UF (REV/CTS): icones no canto superior direito da grade.
     """
-    candidatos = driver.find_elements(
+    # 1) Cabecalho "Visualização do cubo..."
+    cabecalhos = driver.find_elements(
         By.XPATH,
         "//*[contains(@aria-label,'Visualização do cubo') or contains(@aria-label,'Visualizacao do cubo') "
         "or contains(.,'Visualização do cubo') or contains(.,'Visualizacao do cubo') "
         "or contains(.,'Banco de dados:')]",
     )
-    for el in candidatos:
-        try:
-            if not el.is_displayed():
-                continue
-            # Sobe para um container largo o bastante (barra do widget).
-            alvo = el
-            for _ in range(6):
-                pai = alvo.find_element(By.XPATH, "..")
-                try:
-                    w = pai.size.get("width", 0) or 0
-                    if w > 400:
-                        alvo = pai
-                        break
-                except Exception:
-                    break
-                alvo = pai
+    grades = driver.find_elements(
+        By.XPATH,
+        "//*[contains(@class,'TM1MDV') or contains(@class,'cubeViewer') or contains(@class,'exploration') "
+        "or contains(@aria-label,'Visualização do cubo')]",
+    )
 
-            # Clica no lado direito da barra (onde o icone de export aparece).
-            largura = alvo.size.get("width", 0) or 0
-            altura = alvo.size.get("height", 0) or 0
-            if largura < 50:
-                continue
-            offset_x = max(int(largura * 0.75), 40)
-            offset_y = max(int(altura / 2), 5)
-            # move_to_element_with_offset usa centro do elemento; ajustamos a partir do centro.
-            dx = offset_x - int(largura / 2)
-            dy = offset_y - int(altura / 2)
-            log("Clicando na area do cabecalho do cubo para revelar a toolbar de export...")
-            ActionChains(driver).move_to_element_with_offset(alvo, dx, dy).click().perform()
-            time.sleep(1.5)
-            return True
+    alvos = []
+    for el in cabecalhos:
+        try:
+            if el.is_displayed():
+                alvos.append(("cabecalho", _container_widget(el)))
         except Exception:
-            continue
+            pass
+    for el in grades:
+        try:
+            if el.is_displayed():
+                alvos.append(("grade", _container_widget(el)))
+        except Exception:
+            pass
+
+    # Estrategias de clique: (frac_x, frac_y, rotulo)
+    # Alterna conforme a tentativa — a partir da 4a exportacao costuma ser topo-direita da grade.
+    pontos = [
+        (0.85, 0.08, "topo-direita da grade/widget"),   # REV.900 no print
+        (0.75, 0.50, "direita do cabecalho"),           # IRAT/FIS
+        (0.92, 0.15, "canto superior direito"),
+        (0.50, 0.40, "centro da grade"),
+        (0.95, 0.05, "extrema topo-direita"),
+    ]
+    # Rotaciona a ordem pela estrategia.
+    pontos = pontos[estrategia % len(pontos):] + pontos[: estrategia % len(pontos)]
+
+    for tipo, alvo in alvos:
+        for fx, fy, rotulo in pontos[:3]:
+            if _clicar_offset_no_elemento(driver, alvo, fx, fy, f"{tipo}/{rotulo}"):
+                # Hover adicional no topo-direita ajuda a manter a toolbar visivel.
+                try:
+                    w = alvo.size.get("width", 0) or 0
+                    h = alvo.size.get("height", 0) or 0
+                    ActionChains(driver).move_to_element_with_offset(
+                        alvo, int(w * 0.4), int(-h * 0.35)
+                    ).pause(0.4).perform()
+                except Exception:
+                    pass
+                return True
     return False
 
 
-def focar_widget_cubo(driver) -> None:
-    """Seleciona o widget do cubo para exibir a OnDemandToolbar (Exportar para planilha)."""
-    if _clicar_cabecalho_widget_cubo(driver):
+def focar_widget_cubo(driver, estrategia: int = 0) -> None:
+    """Seleciona o widget do cubo para exibir a OnDemandToolbar."""
+    if revelar_toolbar_export(driver, estrategia=estrategia):
         return
     try:
-        widget = achar_elemento(driver, "widget_cubo", timeout=8, clicavel=False)
-        # Clique deslocado para a direita do titulo (area branca do print).
-        try:
-            w = widget.size.get("width", 200) or 200
-            ActionChains(driver).move_to_element_with_offset(
-                widget, int(w * 0.35), 0
-            ).click().perform()
-        except Exception:
-            clicar(driver, widget)
-        time.sleep(1.5)
+        widget = achar_elemento(driver, "widget_cubo", timeout=6, clicavel=False)
+        _clicar_offset_no_elemento(driver, widget, 0.85, 0.1, "widget_cubo topo-direita")
         return
     except TimeoutException:
         pass
     try:
-        grade = achar_elemento(driver, "grade_cubo", timeout=8, clicavel=False)
-        clicar(driver, grade)
-        time.sleep(1.5)
+        grade = achar_elemento(driver, "grade_cubo", timeout=6, clicavel=False)
+        _clicar_offset_no_elemento(driver, grade, 0.9, 0.05, "grade topo-direita")
     except TimeoutException:
         log("Widget/grade do cubo nao localizados.")
 
 
 def achar_botao_exportar_planilha_js(driver):
-    """Procura o botao por aria/title/texto, inclusive shadow DOM."""
+    """Procura o botao por aria/title/texto/icone, inclusive shadow DOM."""
     script = """
-    const needles = ['exportar para planilha','export to spreadsheet','planilha','spreadsheet'];
+    const needles = ['exportar para planilha','export to spreadsheet','planilha','spreadsheet','exportar','download'];
+    const iconNeedles = ['document_export','common-download','metricsExport','download','export'];
     function texts(el) {
+      const uses = Array.from(el.querySelectorAll('use')).map(u =>
+        (u.getAttribute('href') || u.getAttribute('xlink:href') || '')
+      ).join(' ');
       return [
         el.getAttribute('aria-label') || '',
         el.getAttribute('title') || '',
         el.innerText || '',
+        uses,
         ...(Array.from(el.querySelectorAll('span')).map(s => s.textContent || ''))
       ].join(' | ').toLowerCase();
     }
-    function walk(root) {
-      const nodes = root.querySelectorAll('button, [role="button"], a');
-      for (const el of nodes) {
-        const t = texts(el);
-        if (needles.some(n => t.includes(n))) {
-          const r = el.getBoundingClientRect();
-          if (r.width > 0 && r.height > 0) return el;
-        }
-      }
-      for (const el of root.querySelectorAll('*')) {
-        if (el.shadowRoot) {
-          const found = walk(el.shadowRoot);
-          if (found) return found;
-        }
-      }
-      return null;
+    function score(el) {
+      const t = texts(el);
+      let s = 0;
+      if (t.includes('exportar para planilha') || t.includes('export to spreadsheet')) s += 100;
+      if (t.includes('planilha') || t.includes('spreadsheet')) s += 50;
+      if (iconNeedles.some(n => t.includes(n))) s += 40;
+      if (t.includes('exportar') || t.includes('download')) s += 20;
+      return s;
     }
-    return walk(document);
+    function walk(root, acc) {
+      root.querySelectorAll('button, [role="button"], a').forEach(el => {
+        const r = el.getBoundingClientRect();
+        if (r.width <= 0 || r.height <= 0) return;
+        const sc = score(el);
+        if (sc > 0) acc.push([sc, el]);
+      });
+      root.querySelectorAll('*').forEach(el => {
+        if (el.shadowRoot) walk(el.shadowRoot, acc);
+      });
+    }
+    const acc = [];
+    walk(document, acc);
+    acc.sort((a,b) => b[0]-a[0]);
+    return acc.length ? acc[0][1] : null;
     """
     return driver.execute_script(script)
 
@@ -823,8 +877,7 @@ def achar_botao_exportar_planilha_js(driver):
 def exportar_para_excel(driver) -> None:
     """
     Exporta a exploration aberta para Excel.
-    Na Claro o botao so aparece DEPOIS de clicar na area branca do cabecalho
-    do widget do cubo (OnDemandToolbar).
+    Alterna pontos de clique: cabecalho (IRAT/FIS) e topo-direita da grade (REV/CTS).
     """
     log("Acionando exportacao para Excel...")
     driver.switch_to.default_content()
@@ -832,9 +885,9 @@ def exportar_para_excel(driver) -> None:
     desligar_modo_editar(driver)
 
     botao = None
-    for tentativa in range(1, 5):
-        log(f"Revelando toolbar do cubo (tentativa {tentativa}/4)...")
-        focar_widget_cubo(driver)
+    for tentativa in range(0, 6):
+        log(f"Revelando toolbar do cubo (tentativa {tentativa + 1}/6)...")
+        focar_widget_cubo(driver, estrategia=tentativa)
         time.sleep(1)
         try:
             botao = achar_elemento(driver, "botao_exportar_planilha", timeout=3)
@@ -857,8 +910,8 @@ def exportar_para_excel(driver) -> None:
         ):
             raise TimeoutException(
                 "Nao encontrei o botao/menu 'Exportar para planilha'. "
-                "Clique manualmente na area branca a direita de "
-                "'Visualização do cubo...' para revelar a toolbar."
+                "Nas views REV/CTS, clique no canto superior direito da grade "
+                "para revelar o icone de download."
             )
     else:
         log("Clicando em 'Exportar para planilha'...")
