@@ -42,20 +42,31 @@ BASE_DIR = Path(__file__).resolve().parent
 # (sidebar esquerda). Cada entrada e uma lista de alternativas em ordem.
 # ---------------------------------------------------------------------------
 SELETORES = {
+    # Debug Claro: botao id=com.ibm.bi.glass.common.navmenu, aria-label="Início".
     "menu_hamburguer": [
-        (By.CSS_SELECTOR, "button[aria-label*='Navigation']"),
-        (By.CSS_SELECTOR, "button[aria-label*='avegação']"),
-        (By.CSS_SELECTOR, "button[aria-label*='avegacao']"),
-        (By.CSS_SELECTOR, "button[aria-label*='Main menu']"),
-        (By.CSS_SELECTOR, "button[aria-label*='Menu']"),
-        (By.XPATH, "//button[contains(@aria-label,'menu') or contains(@aria-label,'Menu')]"),
-        (By.XPATH, "//header//button[1]"),
+        (By.CSS_SELECTOR, "#com\\.ibm\\.bi\\.glass\\.common\\.navmenu"),
+        (By.CSS_SELECTOR, "button[data-id='com.ibm.bi.glass.common.navmenu']"),
+        (By.CSS_SELECTOR, "[walkme-data-id='com.ibm.bi.glass.common.navmenu'] button"),
+        (By.CSS_SELECTOR, "button.ba-carbon-nav-menu"),
+        (By.CSS_SELECTOR, "button[data-tid='buc-OverflowMenu']"),
+        (By.XPATH, "//button[@id='com.ibm.bi.glass.common.navmenu']"),
     ],
     "link_compartilhado": [
         (By.XPATH, "//*[self::a or self::button or self::span or self::div][normalize-space(.)='Compartilhado']"),
         (By.XPATH, "//*[contains(@aria-label,'Compartilhado')]"),
+        (By.XPATH, "//*[contains(@class,'create-menu-link')][contains(.,'Compartilhado')]"),
         (By.XPATH, "//*[self::a or self::button or self::span][normalize-space(.)='Shared']"),
         (By.XPATH, "//*[contains(text(),'Compartilhado')]"),
+    ],
+    "aba_favoritos": [
+        (By.XPATH, "//*[@role='tab' and (normalize-space(.)='Favoritos' or @title='Favoritos')]"),
+        (By.XPATH, "//button[normalize-space(.)='Favoritos']"),
+        (By.XPATH, "//*[@title='Favoritos']"),
+    ],
+    "aba_recentes": [
+        (By.XPATH, "//*[@role='tab' and (normalize-space(.)='Recentes' or @title='Recentes')]"),
+        (By.XPATH, "//button[normalize-space(.)='Recentes']"),
+        (By.XPATH, "//*[@title='Recentes']"),
     ],
     "campo_pesquisa": [
         # Campo da sidebar Compartilhado (screenshot: placeholder "Pesquisar")
@@ -71,6 +82,7 @@ SELETORES = {
         (By.XPATH, "//*[contains(.,'Início rápido') or contains(.,'Inicio rapido') or contains(.,'Quick start')]"),
         (By.XPATH, "//*[contains(.,'Meus aplicativos') or contains(.,'My applications')]"),
         (By.XPATH, "//*[contains(.,'IBM Planning Analytics')]"),
+        (By.CSS_SELECTOR, "#com\\.ibm\\.bi\\.glass\\.common\\.navmenu"),
     ],
     "menu_exportar": [
         (By.XPATH, "//*[self::button or self::span or self::a][contains(., 'Exportar')]"),
@@ -295,8 +307,46 @@ def aguardar_login(driver, timeout: int) -> None:
     raise TimeoutException("Tempo esgotado aguardando o login no Planning Analytics.")
 
 
+def abrir_por_tile(driver, nome_busca: str) -> bool:
+    """
+    Tenta abrir a view pelo tile ja presente na home (Favoritos/Recentes).
+    No HTML de debug da Claro esses tiles existem com:
+      <div title="Receita DRE PowerBI V2 (irat950)" class="pa-tile-header ...">
+    """
+    literais = xpath_literal(nome_busca)
+    xpaths = [
+        f"//div[contains(@class,'pa-tile-header') and @title={literais}]",
+        f"//*[@title={literais} and contains(@class,'pa-tile')]",
+        f"//a[contains(@class,'pa-tile')][.//div[@title={literais}]]",
+        f"//div[contains(@class,'click-area')][.//*[@title={literais}]]",
+    ]
+
+    # Tenta nas abas onde os tiles costumam aparecer.
+    for aba in ("aba_favoritos", "aba_recentes"):
+        try:
+            el_aba = achar_elemento(driver, aba, timeout=3)
+            clicar(driver, el_aba)
+            time.sleep(2)
+        except TimeoutException:
+            pass
+
+        for xp in xpaths:
+            els = driver.find_elements(By.XPATH, xp)
+            for el in els:
+                try:
+                    if not el.is_displayed():
+                        continue
+                    log(f"Tile encontrado na home: {nome_busca}")
+                    clicar(driver, el)
+                    time.sleep(10)
+                    return True
+                except Exception:
+                    continue
+    return False
+
+
 def abrir_compartilhado(driver, pasta_debug: Path | None = None) -> None:
-    """Garante que a sidebar Compartilhado (com o campo Pesquisar) esteja aberta."""
+    """Abre o menu de navegacao e entra em Compartilhado (campo Pesquisar)."""
     try:
         achar_campo_pesquisa(driver, timeout=3)
         log("Sidebar Compartilhado ja aberta.")
@@ -304,18 +354,22 @@ def abrir_compartilhado(driver, pasta_debug: Path | None = None) -> None:
     except TimeoutException:
         pass
 
-    log("Abrindo pasta Compartilhado...")
+    log("Abrindo menu de navegacao (navmenu)...")
     try:
-        menu = achar_elemento(driver, "menu_hamburguer", timeout=10)
+        menu = achar_elemento(driver, "menu_hamburguer", timeout=15)
         clicar(driver, menu)
-        time.sleep(1.5)
+        time.sleep(2)
     except TimeoutException:
-        log("Menu hamburguer nao encontrado; tentando link Compartilhado direto.")
+        if pasta_debug is not None:
+            salvar_debug(driver, pasta_debug, "sem_navmenu")
+        raise TimeoutException(
+            "Nao encontrei o botao do menu (#com.ibm.bi.glass.common.navmenu)."
+        )
 
     try:
         link = achar_elemento(driver, "link_compartilhado", timeout=20)
         clicar(driver, link)
-        time.sleep(3)
+        time.sleep(4)
     except TimeoutException:
         if pasta_debug is not None:
             salvar_debug(driver, pasta_debug, "sem_compartilhado")
@@ -331,18 +385,28 @@ def abrir_compartilhado(driver, pasta_debug: Path | None = None) -> None:
 
 
 def pesquisar_e_abrir(driver, nome_busca: str, pasta_debug: Path | None = None) -> None:
-    """Abre Compartilhado, pesquisa a view e clica no resultado."""
+    """Abre a view: primeiro tenta tile na home; senao pesquisa no Compartilhado."""
+    log(f"Abrindo view: {nome_busca}")
+
+    if abrir_por_tile(driver, nome_busca):
+        log("View aberta via tile da home.")
+        return
+
+    log("Tile nao encontrado na home; indo para Compartilhado...")
     abrir_compartilhado(driver, pasta_debug=pasta_debug)
 
     log(f"Pesquisando: {nome_busca}")
     campo = achar_campo_pesquisa(driver, timeout=20)
     clicar(driver, campo)
-    # Limpa o campo de forma robusta (clear() às vezes falha em inputs React).
     try:
         campo.send_keys(Keys.CONTROL, "a")
         campo.send_keys(Keys.BACKSPACE)
     except Exception:
-        driver.execute_script("arguments[0].value=''; arguments[0].dispatchEvent(new Event('input',{bubbles:true}));", campo)
+        driver.execute_script(
+            "arguments[0].value='';"
+            "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));",
+            campo,
+        )
     time.sleep(0.3)
     campo.send_keys(nome_busca)
     time.sleep(1)
@@ -351,7 +415,7 @@ def pesquisar_e_abrir(driver, nome_busca: str, pasta_debug: Path | None = None) 
 
     resultado = achar_resultado(driver, nome_busca, timeout=30)
     clicar(driver, resultado)
-    log("View aberta. Aguardando carregar...")
+    log("View aberta via pesquisa no Compartilhado. Aguardando carregar...")
     time.sleep(10)
 
 
@@ -530,6 +594,9 @@ def main() -> int:
                 else:
                     mover_para_destino(arquivo, job, pasta_backup)
                 resultados.append((job["nome"], "OK"))
+                # Volta para a home para a proxima exportacao.
+                driver.get(cfg["url"])
+                time.sleep(6)
             except Exception as e:
                 log(f"ERRO em '{job['nome']}': {e}")
                 resultados.append((job["nome"], f"ERRO: {e}"))
