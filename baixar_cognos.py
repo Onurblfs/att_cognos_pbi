@@ -37,21 +37,40 @@ from selenium.webdriver.support.ui import WebDriverWait
 BASE_DIR = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
-# Seletores da interface do Planning Analytics Workspace.
-# ATENCAO: podem precisar de ajuste conforme a versao instalada na Claro.
-# Cada entrada e uma lista de alternativas tentadas em ordem.
+# Seletores da interface do Planning Analytics Workspace (Claro).
+# O campo "Pesquisar" so aparece DEPOIS de abrir a pasta Compartilhado
+# (sidebar esquerda). Cada entrada e uma lista de alternativas em ordem.
 # ---------------------------------------------------------------------------
 SELETORES = {
-    "botao_pesquisa": [
-        (By.CSS_SELECTOR, "button[aria-label*='esquis']"),   # Pesquisa / Pesquisar
-        (By.CSS_SELECTOR, "button[aria-label*='Search']"),
-        (By.CSS_SELECTOR, "[data-testid*='search'] button"),
+    "menu_hamburguer": [
+        (By.CSS_SELECTOR, "button[aria-label*='Navigation']"),
+        (By.CSS_SELECTOR, "button[aria-label*='avegação']"),
+        (By.CSS_SELECTOR, "button[aria-label*='avegacao']"),
+        (By.CSS_SELECTOR, "button[aria-label*='Main menu']"),
+        (By.CSS_SELECTOR, "button[aria-label*='Menu']"),
+        (By.XPATH, "//button[contains(@aria-label,'menu') or contains(@aria-label,'Menu')]"),
+        (By.XPATH, "//header//button[1]"),
+    ],
+    "link_compartilhado": [
+        (By.XPATH, "//*[self::a or self::button or self::span or self::div][normalize-space(.)='Compartilhado']"),
+        (By.XPATH, "//*[contains(@aria-label,'Compartilhado')]"),
+        (By.XPATH, "//*[self::a or self::button or self::span][normalize-space(.)='Shared']"),
+        (By.XPATH, "//*[contains(text(),'Compartilhado')]"),
     ],
     "campo_pesquisa": [
+        # Campo da sidebar Compartilhado (screenshot: placeholder "Pesquisar")
+        (By.XPATH, "//input[contains(@placeholder,'Pesquisar') or contains(@placeholder,'esquis')]"),
+        (By.CSS_SELECTOR, "input[placeholder*='Pesquisar']"),
         (By.CSS_SELECTOR, "input[placeholder*='esquis']"),
         (By.CSS_SELECTOR, "input[placeholder*='Search']"),
         (By.CSS_SELECTOR, "input[type='search']"),
         (By.CSS_SELECTOR, "input[role='searchbox']"),
+        (By.XPATH, "//aside//input | //nav//input | //*[contains(@class,'search')]//input"),
+    ],
+    "home_carregada": [
+        (By.XPATH, "//*[contains(.,'Início rápido') or contains(.,'Inicio rapido') or contains(.,'Quick start')]"),
+        (By.XPATH, "//*[contains(.,'Meus aplicativos') or contains(.,'My applications')]"),
+        (By.XPATH, "//*[contains(.,'IBM Planning Analytics')]"),
     ],
     "menu_exportar": [
         (By.XPATH, "//*[self::button or self::span or self::a][contains(., 'Exportar')]"),
@@ -93,15 +112,14 @@ def criar_driver(pasta_downloads: Path) -> webdriver.Edge:
     return webdriver.Edge(options=opcoes)
 
 
-def achar_elemento(driver, chave_seletor: str, timeout: int = 20):
-    """Tenta as alternativas de seletor em ordem ate encontrar um elemento clicavel."""
+def achar_elemento(driver, chave_seletor: str, timeout: int = 20, clicavel: bool = True):
+    """Tenta as alternativas de seletor em ordem ate encontrar um elemento."""
+    condicao = EC.element_to_be_clickable if clicavel else EC.presence_of_element_located
     fim = time.time() + timeout
     while time.time() < fim:
         for by, seletor in SELETORES[chave_seletor]:
             try:
-                el = WebDriverWait(driver, 2).until(
-                    EC.element_to_be_clickable((by, seletor))
-                )
+                el = WebDriverWait(driver, 2).until(condicao((by, seletor)))
                 return el
             except TimeoutException:
                 continue
@@ -111,14 +129,23 @@ def achar_elemento(driver, chave_seletor: str, timeout: int = 20):
     )
 
 
+def clicar(driver, elemento) -> None:
+    """Clica com scroll + fallback via JavaScript (PA às vezes bloqueia click nativo)."""
+    try:
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento)
+        time.sleep(0.3)
+        elemento.click()
+    except Exception:
+        driver.execute_script("arguments[0].click();", elemento)
+
+
 def aguardar_login(driver, timeout: int) -> None:
     """Espera ate a home do PA carregar (apos login manual/SSO)."""
     log("Aguardando login... Se aparecer a tela de login, entre com seu usuario.")
     fim = time.time() + timeout
     while time.time() < fim:
         try:
-            # A home carregada tem a barra superior com o botao de pesquisa.
-            for by, seletor in SELETORES["botao_pesquisa"] + SELETORES["campo_pesquisa"]:
+            for by, seletor in SELETORES["home_carregada"]:
                 if driver.find_elements(by, seletor):
                     log("Login concluido, pagina inicial carregada.")
                     time.sleep(3)
@@ -129,30 +156,103 @@ def aguardar_login(driver, timeout: int) -> None:
     raise TimeoutException("Tempo esgotado aguardando o login no Planning Analytics.")
 
 
-def pesquisar_e_abrir(driver, nome_busca: str) -> None:
-    """Pesquisa o nome da view e abre o primeiro resultado com o nome exato."""
-    log(f"Pesquisando: {nome_busca}")
+def abrir_compartilhado(driver) -> None:
+    """Garante que a sidebar Compartilhado (com o campo Pesquisar) esteja aberta."""
+    # Se o campo Pesquisar ja esta visivel, estamos no lugar certo.
     try:
-        botao = achar_elemento(driver, "botao_pesquisa", timeout=10)
-        botao.click()
-        time.sleep(1)
+        achar_elemento(driver, "campo_pesquisa", timeout=3, clicavel=False)
+        log("Sidebar Compartilhado ja aberta.")
+        return
     except TimeoutException:
-        pass  # em algumas versoes o campo ja fica visivel sem clicar no icone
+        pass
 
-    campo = achar_elemento(driver, "campo_pesquisa", timeout=15)
-    campo.clear()
+    log("Abrindo pasta Compartilhado...")
+    try:
+        menu = achar_elemento(driver, "menu_hamburguer", timeout=10)
+        clicar(driver, menu)
+        time.sleep(1.5)
+    except TimeoutException:
+        log("Menu hamburguer nao encontrado; tentando link Compartilhado direto.")
+
+    link = achar_elemento(driver, "link_compartilhado", timeout=20)
+    clicar(driver, link)
+    time.sleep(3)
+
+    # Confirma que o campo Pesquisar apareceu.
+    achar_elemento(driver, "campo_pesquisa", timeout=20, clicavel=False)
+    log("Compartilhado aberto.")
+
+
+def pesquisar_e_abrir(driver, nome_busca: str) -> None:
+    """Abre Compartilhado, pesquisa a view e clica no resultado."""
+    abrir_compartilhado(driver)
+
+    log(f"Pesquisando: {nome_busca}")
+    campo = achar_elemento(driver, "campo_pesquisa", timeout=20)
+    clicar(driver, campo)
+    # Limpa o campo de forma robusta (clear() às vezes falha em inputs React).
+    campo.send_keys(Keys.CONTROL, "a")
+    campo.send_keys(Keys.BACKSPACE)
+    time.sleep(0.3)
     campo.send_keys(nome_busca)
+    time.sleep(1)
     campo.send_keys(Keys.ENTER)
     time.sleep(4)
 
-    # Clica no resultado cujo texto bate com o nome pesquisado.
-    xpath_resultado = f"//*[normalize-space(text())={xpath_literal(nome_busca)}]"
-    resultado = WebDriverWait(driver, 30).until(
-        EC.element_to_be_clickable((By.XPATH, xpath_resultado))
-    )
-    resultado.click()
+    resultado = achar_resultado(driver, nome_busca, timeout=30)
+    clicar(driver, resultado)
     log("View aberta. Aguardando carregar...")
     time.sleep(10)
+
+
+def achar_resultado(driver, nome_busca: str, timeout: int = 30):
+    """
+    Localiza o resultado da pesquisa.
+    A UI do PA trunca o texto (ex.: 'Receita DRE P... V2 (irat950)'),
+    entao tenta match exato, title/aria-label e contains parcial.
+    """
+    literais = xpath_literal(nome_busca)
+    # Trechos distintivos do nome (evita depender do texto truncado).
+    trechos = [nome_busca]
+    if "(" in nome_busca and nome_busca.endswith(")"):
+        trechos.append(nome_busca[nome_busca.rfind("(") :])  # ex.: (irat950)
+    if " - " in nome_busca:
+        trechos.append(nome_busca.split(" - ")[0].strip())
+
+    candidatos_xpath = [
+        f"//*[@title={literais} or @aria-label={literais}]",
+        f"//*[normalize-space(.)={literais}]",
+    ]
+    for trecho in trechos:
+        lit = xpath_literal(trecho)
+        candidatos_xpath.append(f"//*[contains(normalize-space(.), {lit})]")
+        candidatos_xpath.append(f"//*[@title[contains(., {lit})] or @aria-label[contains(., {lit})]]")
+
+    fim = time.time() + timeout
+    while time.time() < fim:
+        for xp in candidatos_xpath:
+            els = driver.find_elements(By.XPATH, xp)
+            for el in els:
+                try:
+                    texto = (el.text or "").strip()
+                    title = (el.get_attribute("title") or el.get_attribute("aria-label") or "").strip()
+                    # Ignora o proprio campo de busca / labels genericos.
+                    if el.tag_name.lower() in {"input", "textarea", "html", "body"}:
+                        continue
+                    if nome_busca.lower() in texto.lower() or nome_busca.lower() in title.lower():
+                        if el.is_displayed():
+                            log(f"Resultado encontrado: {texto or title}")
+                            return el
+                    # Match por trecho curto distintivo (ex.: (irat950)) quando truncado.
+                    for trecho in trechos[1:]:
+                        if trecho.lower() in texto.lower() or trecho.lower() in title.lower():
+                            if el.is_displayed() and len(texto) > 3:
+                                log(f"Resultado encontrado (parcial): {texto or title}")
+                                return el
+                except Exception:
+                    continue
+        time.sleep(1)
+    raise TimeoutException(f"Nao encontrei o resultado da pesquisa para: {nome_busca}")
 
 
 def xpath_literal(texto: str) -> str:
