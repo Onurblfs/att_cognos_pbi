@@ -116,12 +116,21 @@ SELETORES = {
         (By.XPATH, "//input[@value='Entrar' or @value='Login' or @value='Sign in']"),
         (By.CSS_SELECTOR, "button.login, #loginButton, .signInBtn"),
     ],
-    # Apenas o botao certo (tooltip Claro). Sem seletores genericos de download.
+    # Toolbar PA: data-id=exportAction, aria-label="Exportar" (#common-download).
+    # O tooltip visual pode dizer "Exportar para planilha", mas no DOM e so "Exportar".
     "botao_exportar_planilha": [
+        (By.CSS_SELECTOR, "button[data-id='exportAction']"),
+        (By.CSS_SELECTOR, "button[walkme-data-id='exportAction']"),
+        (By.XPATH, "//button[@aria-label='Exportar' or @aria-label='Export']"),
         (By.XPATH, "//*[@aria-label='Exportar para planilha' or @title='Exportar para planilha']"),
-        (By.XPATH, "//button[contains(@aria-label,'Exportar para planilha') or contains(@title,'Exportar para planilha')]"),
         (By.XPATH, "//*[@aria-label='Export to spreadsheet' or @title='Export to spreadsheet']"),
-        (By.XPATH, "//button[.//span[contains(@class,'assistive') and contains(.,'Exportar para planilha')]]"),
+        (By.XPATH, "//button[.//span[contains(@class,'assistive') and (normalize-space(.)='Exportar' or contains(.,'Exportar para planilha'))]]"),
+    ],
+    "opcao_exportar_planilha": [
+        (By.XPATH, "//*[self::button or self::a or self::li or self::div or self::span][normalize-space(.)='Exportar para planilha' or normalize-space(.)='Export to spreadsheet']"),
+        (By.XPATH, "//*[contains(@aria-label,'Exportar para planilha') or contains(@title,'Exportar para planilha')]"),
+        (By.XPATH, "//*[contains(@aria-label,'Export to spreadsheet') or contains(@title,'Export to spreadsheet')]"),
+        (By.XPATH, "//*[@role='menuitem' or @role='option'][contains(.,'planilha') or contains(.,'spreadsheet') or contains(.,'Excel')]"),
     ],
     "toggle_editar": [
         (By.CSS_SELECTOR, "input[id*='editToggleButton']"),
@@ -688,21 +697,35 @@ def _clicar_item_menu_por_texto(driver, textos, timeout: int = 10) -> bool:
 
 
 def desligar_modo_editar(driver) -> None:
-    """O botao Exportar para planilha so aparece com Editar desligado."""
+    """Preferivel Editar desligado; tenta desmarcar o toggle Carbon."""
     try:
         toggle = achar_elemento(driver, "toggle_editar", timeout=5, clicavel=False)
     except TimeoutException:
         return
     try:
-        if toggle.is_selected():
-            log("Desligando modo Editar...")
-            # Clica no label/toggle via JS (input checkbox as vezes nao e clicavel).
-            driver.execute_script(
-                "arguments[0].click();"
-                "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));",
-                toggle,
-            )
-            time.sleep(2)
+        if not toggle.is_selected():
+            return
+        log("Desligando modo Editar...")
+        tid = toggle.get_attribute("id") or ""
+        # Label do Carbon e o alvo clicavel real.
+        if tid:
+            for lab in driver.find_elements(By.CSS_SELECTOR, f"label[for='{tid}']"):
+                try:
+                    if lab.is_displayed():
+                        lab.click()
+                        time.sleep(2)
+                        if not toggle.is_selected():
+                            return
+                except Exception:
+                    continue
+        driver.execute_script(
+            "arguments[0].click();"
+            "arguments[0].checked=false;"
+            "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));"
+            "arguments[0].dispatchEvent(new Event('input',{bubbles:true}));",
+            toggle,
+        )
+        time.sleep(2)
     except Exception as e:
         log(f"Nao foi possivel desligar Editar: {e}")
 
@@ -749,22 +772,25 @@ def selecionar_cubo(driver) -> None:
 
 
 def achar_botao_exportar_planilha(driver, timeout: int = 12):
-    """So aceita botao com label/title 'Exportar para planilha'."""
+    """Botao da toolbar: data-id=exportAction / aria-label Exportar."""
     fim = time.time() + timeout
     while time.time() < fim:
         try:
             return achar_elemento(driver, "botao_exportar_planilha", timeout=2)
         except TimeoutException:
-            # Busca JS estrita (sem download generico / tela cheia).
             el = driver.execute_script(
                 """
-                const want = ['exportar para planilha', 'export to spreadsheet'];
-                const nodes = document.querySelectorAll('button, [role="button"], a, *');
+                const byId = document.querySelector("button[data-id='exportAction'], button[walkme-data-id='exportAction']");
+                if (byId) {
+                  const r = byId.getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) return byId;
+                }
+                const nodes = document.querySelectorAll('button, [role="button"]');
                 for (const el of nodes) {
-                  const t = ((el.getAttribute('aria-label')||'') + ' ' +
-                             (el.getAttribute('title')||'') + ' ' +
-                             (el.innerText||'')).toLowerCase();
-                  if (!want.some(w => t.includes(w))) continue;
+                  const aria = (el.getAttribute('aria-label') || '').trim().toLowerCase();
+                  const assist = (el.querySelector('.bx--assistive-text')?.textContent || '').trim().toLowerCase();
+                  const t = aria || assist;
+                  if (t !== 'exportar' && t !== 'export' && !t.includes('exportar para planilha') && !t.includes('export to spreadsheet')) continue;
                   if (t.includes('tela cheia') || t.includes('fullscreen')) continue;
                   const r = el.getBoundingClientRect();
                   if (r.width > 0 && r.height > 0) return el;
@@ -778,14 +804,49 @@ def achar_botao_exportar_planilha(driver, timeout: int = 12):
     return None
 
 
+def clicar_opcao_menu_planilha(driver, timeout: int = 6) -> bool:
+    """Se Exportar abrir menu, escolhe a opcao de planilha/Excel."""
+    fim = time.time() + timeout
+    while time.time() < fim:
+        try:
+            opcao = achar_elemento(driver, "opcao_exportar_planilha", timeout=1)
+            label = (opcao.text or opcao.get_attribute("aria-label") or "").strip()
+            log(f"Clicando opcao do menu: {label or 'Exportar para planilha'}")
+            driver.execute_script("arguments[0].click();", opcao)
+            time.sleep(1.5)
+            return True
+        except TimeoutException:
+            el = driver.execute_script(
+                """
+                const want = ['exportar para planilha', 'export to spreadsheet', 'excel', 'xlsx'];
+                const nodes = document.querySelectorAll('[role="menuitem"], [role="option"], li, button, a, span, div');
+                for (const el of nodes) {
+                  const t = ((el.getAttribute('aria-label')||'') + ' ' + (el.textContent||'')).trim().toLowerCase();
+                  if (!want.some(w => t.includes(w))) continue;
+                  if (t.length > 80) continue;
+                  const r = el.getBoundingClientRect();
+                  if (r.width > 0 && r.height > 0) return el;
+                }
+                return null;
+                """
+            )
+            if el is not None:
+                log("Clicando opcao do menu (JS)...")
+                driver.execute_script("arguments[0].click();", el)
+                time.sleep(1.5)
+                return True
+        time.sleep(0.4)
+    return False
+
+
 def exportar_para_excel(driver) -> None:
     """
-    Fluxo minimo:
+    Fluxo:
       1) Escape (sair tela cheia se houver)
       2) Desligar Editar
       3) Clicar no titulo do cubo
-      4) Achar 'Exportar para planilha' e clicar UMA vez (JS)
-    Sem Tab em loop e sem cliques por coordenadas.
+      4) Clicar no botao toolbar Exportar (data-id=exportAction)
+      5) Se abrir menu, escolher planilha/Excel; confirmar dialogo se houver
     """
     log("Acionando exportacao para Excel (fluxo simples)...")
     driver.switch_to.default_content()
@@ -795,24 +856,32 @@ def exportar_para_excel(driver) -> None:
 
     botao = achar_botao_exportar_planilha(driver, timeout=15)
     if botao is None:
-        # Segunda chance: seleciona de novo e espera.
         selecionar_cubo(driver)
         botao = achar_botao_exportar_planilha(driver, timeout=10)
     if botao is None:
         raise TimeoutException(
-            "Botao 'Exportar para planilha' nao apareceu apos selecionar o cubo."
+            "Botao Exportar (exportAction) nao apareceu na toolbar apos selecionar o cubo."
         )
 
     label = (botao.get_attribute("aria-label") or botao.get_attribute("title") or "").strip()
-    log(f"Clicando uma vez em: {label or 'Exportar para planilha'}")
+    data_id = botao.get_attribute("data-id") or ""
+    log(f"Clicando uma vez em: {label or 'Exportar'} (data-id={data_id or '-'})")
     driver.execute_script("arguments[0].click();", botao)
-    time.sleep(3)
+    time.sleep(1.5)
+
+    # Menu dropdown opcional (Exportar para planilha / Excel).
+    if clicar_opcao_menu_planilha(driver, timeout=5):
+        time.sleep(1)
+    else:
+        log("Menu de planilha nao apareceu; seguindo (clique direto pode ja iniciar o download).")
 
     # Dialogo opcional.
     try:
         confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=5)
-        driver.execute_script("arguments[0].click();", confirmar)
-        time.sleep(1)
+        # Evita reclicar o mesmo botao da toolbar.
+        if (confirmar.get_attribute("data-id") or "") != "exportAction":
+            driver.execute_script("arguments[0].click();", confirmar)
+            time.sleep(1)
     except TimeoutException:
         pass
     log("Exportacao acionada; aguardando arquivo baixar.")
