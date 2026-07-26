@@ -920,19 +920,117 @@ def _parece_botao_tela_cheia(el) -> bool:
         return False
 
 
+def _texto_elemento_ativo(driver) -> str:
+    script = """
+    const el = document.activeElement;
+    if (!el) return '';
+    const uses = Array.from(el.querySelectorAll ? el.querySelectorAll('use') : []).map(u =>
+      (u.getAttribute('href') || u.getAttribute('xlink:href') || '')
+    ).join(' ');
+    return [
+      el.getAttribute('aria-label') || '',
+      el.getAttribute('title') || '',
+      el.innerText || '',
+      uses,
+      el.className || ''
+    ].join(' | ').toLowerCase();
+    """
+    try:
+        return driver.execute_script(script) or ""
+    except Exception:
+        return ""
+
+
+def _ativo_eh_export(texto: str) -> bool:
+    if not texto:
+        return False
+    ban = ("tela cheia", "fullscreen", "maximize", "expand", "pop-out", "restore", "olho", "eye")
+    if any(b in texto for b in ban):
+        return False
+    ok = (
+        "exportar para planilha",
+        "export to spreadsheet",
+        "planilha",
+        "spreadsheet",
+        "document_export",
+        "common-download",
+        "metricsexport",
+    )
+    return any(o in texto for o in ok)
+
+
+def exportar_via_tab_enter(driver, max_tabs: int = 40) -> bool:
+    """
+    Foca o cubo e navega com Tab ate o botao Exportar para planilha, depois Enter.
+    Mais estavel que clique por coordenadas (evita tela cheia).
+    """
+    log("Tentando export via Tab + Enter...")
+    sair_tela_cheia(driver)
+
+    # Foca a area do cubo com um clique seguro (centro), so para iniciar o Tab order.
+    focado = False
+    for chave in ("widget_cubo", "grade_cubo"):
+        try:
+            el = achar_elemento(driver, chave, timeout=5, clicavel=False)
+            _clicar_offset_no_elemento(driver, el, 0.45, 0.45, f"foco inicial {chave}")
+            focado = True
+            break
+        except TimeoutException:
+            continue
+    if not focado:
+        try:
+            driver.find_element(By.TAG_NAME, "body").click()
+        except Exception:
+            pass
+
+    body = driver.find_element(By.TAG_NAME, "body")
+    for i in range(1, max_tabs + 1):
+        body.send_keys(Keys.TAB)
+        time.sleep(0.15)
+        texto = _texto_elemento_ativo(driver)
+        if _ativo_eh_export(texto):
+            log(f"Foco no export apos {i} Tab(s): {texto[:120]}")
+            body.send_keys(Keys.ENTER)
+            time.sleep(2)
+            # Se abrir submenu, tenta Excel com mais Tab/Enter ou clique por texto.
+            if _clicar_item_menu_por_texto(driver, ["excel", "xlsx", "planilha"], timeout=4):
+                time.sleep(1.5)
+            else:
+                # As vezes o proprio Enter ja dispara o download.
+                pass
+            return True
+        # Se caiu em tela cheia por engano, sai e continua.
+        if any(x in texto for x in ("tela cheia", "fullscreen", "maximize")):
+            log("Tab passou por tela cheia; enviando Escape e seguindo...")
+            sair_tela_cheia(driver)
+    log("Tab + Enter nao encontrou o botao de export.")
+    return False
+
+
 def exportar_para_excel(driver) -> None:
     """
     Exporta a exploration aberta para Excel.
-    Evita clicar no icone de tela cheia (canto extremo direito).
+    Preferencia: Tab + Enter (mais estavel). Fallback: localizar botao e clicar.
     """
     log("Acionando exportacao para Excel...")
     driver.switch_to.default_content()
     sair_tela_cheia(driver)
     desligar_modo_editar(driver)
 
+    if exportar_via_tab_enter(driver):
+        try:
+            confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=6)
+            clicar(driver, confirmar)
+            time.sleep(2)
+        except TimeoutException:
+            pass
+        log("Exportacao acionada (Tab+Enter); aguardando arquivo baixar.")
+        return
+
+    # Fallback antigo por clique no botao (sem canto de tela cheia).
+    log("Fallback: tentando localizar botao de export por seletor...")
     botao = None
-    for tentativa in range(0, 5):
-        log(f"Revelando toolbar do cubo (tentativa {tentativa + 1}/5)...")
+    for tentativa in range(0, 4):
         focar_widget_cubo(driver, estrategia=tentativa)
         time.sleep(1)
         try:
@@ -945,31 +1043,17 @@ def exportar_para_excel(driver) -> None:
         sair_tela_cheia(driver)
 
     if botao is None:
-        log("Botao nao apareceu; tentando menu de contexto na grade...")
-        try:
-            grade = achar_elemento(driver, "grade_cubo", timeout=5, clicavel=False)
-            ActionChains(driver).move_to_element(grade).context_click().perform()
-            time.sleep(1.5)
-        except Exception as e:
-            log(f"Falha no clique direito: {e}")
-        if not _clicar_item_menu_por_texto(
-            driver, ["exportar para planilha", "export to spreadsheet", "exportar"],
-            timeout=8,
-        ):
-            raise TimeoutException(
-                "Nao encontrei o botao/menu 'Exportar para planilha'."
-            )
-    else:
-        if _parece_botao_tela_cheia(botao):
-            raise TimeoutException("Seletor pegou o botao de tela cheia; abortando clique.")
-        log("Clicando em 'Exportar para planilha'...")
-        try:
-            ActionChains(driver).move_to_element(botao).pause(0.3).click().perform()
-        except Exception:
-            clicar(driver, botao)
-        time.sleep(3)
-        # Se ainda assim entrou em tela cheia, sai e tenta de novo uma vez.
-        sair_tela_cheia(driver)
+        raise TimeoutException(
+            "Nao encontrei o botao/menu 'Exportar para planilha' (Tab+Enter e clique falharam)."
+        )
+
+    log("Clicando em 'Exportar para planilha'...")
+    try:
+        ActionChains(driver).move_to_element(botao).pause(0.3).click().perform()
+    except Exception:
+        clicar(driver, botao)
+    time.sleep(3)
+    sair_tela_cheia(driver)
 
     if _clicar_item_menu_por_texto(driver, ["excel", "xlsx", "planilha"], timeout=5):
         time.sleep(2)
