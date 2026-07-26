@@ -731,6 +731,35 @@ def _container_widget(el):
     return alvo
 
 
+def sair_tela_cheia(driver) -> None:
+    """Sai de tela cheia se o clique anterior acionou o botao errado."""
+    try:
+        driver.switch_to.default_content()
+        body = driver.find_element(By.TAG_NAME, "body")
+        body.send_keys(Keys.ESCAPE)
+        time.sleep(0.5)
+        body.send_keys(Keys.ESCAPE)
+        time.sleep(0.5)
+    except Exception:
+        pass
+    # Botoes tipicos de sair da tela cheia / restaurar.
+    for xp in [
+        "//button[contains(@aria-label,'Sair') or contains(@title,'Sair')]",
+        "//button[contains(@aria-label,'Exit') or contains(@title,'Exit')]",
+        "//button[contains(@aria-label,'Restore') or contains(@title,'Restore')]",
+        "//button[contains(@aria-label,'tela cheia') or contains(@aria-label,'Fullscreen')]",
+        "//button[.//use[contains(@*,'minimize') or contains(@*,'exit') or contains(@*,'restore')]]",
+    ]:
+        try:
+            for el in driver.find_elements(By.XPATH, xp):
+                if el.is_displayed():
+                    clicar(driver, el)
+                    time.sleep(0.8)
+                    return
+        except Exception:
+            continue
+
+
 def _clicar_offset_no_elemento(driver, el, frac_x: float, frac_y: float, rotulo: str) -> bool:
     """Clica em uma posicao relativa dentro do elemento (0..1)."""
     try:
@@ -740,7 +769,10 @@ def _clicar_offset_no_elemento(driver, el, frac_x: float, frac_y: float, rotulo:
         h = el.size.get("height", 0) or 0
         if w < 40 or h < 10:
             return False
-        # move_to_element_with_offset e relativo ao centro.
+        # Nunca clicar na extrema direita do topo — la fica o botao de tela cheia.
+        if frac_x > 0.88 and frac_y < 0.20:
+            log(f"Ignorando clique perigoso (tela cheia): {rotulo}")
+            return False
         dx = int(w * (frac_x - 0.5))
         dy = int(h * (frac_y - 0.5))
         log(f"Clicando para revelar toolbar ({rotulo})...")
@@ -753,11 +785,9 @@ def _clicar_offset_no_elemento(driver, el, frac_x: float, frac_y: float, rotulo:
 
 def revelar_toolbar_export(driver, estrategia: int = 0) -> bool:
     """
-    Revela a toolbar on-demand do cubo.
-    Views ACOMPANHAMENTO (IRAT/FIS): area branca a direita do titulo.
-    Views NET_PLAN_UF (REV/CTS): icones no canto superior direito da grade.
+    Revela a toolbar on-demand do cubo SEM clicar no icone de tela cheia.
+    Preferencia: cabecalho / centro da grade; hover no topo (sem clique extremo).
     """
-    # 1) Cabecalho "Visualização do cubo..."
     cabecalhos = driver.find_elements(
         By.XPATH,
         "//*[contains(@aria-label,'Visualização do cubo') or contains(@aria-label,'Visualizacao do cubo') "
@@ -784,28 +814,26 @@ def revelar_toolbar_export(driver, estrategia: int = 0) -> bool:
         except Exception:
             pass
 
-    # Estrategias de clique: (frac_x, frac_y, rotulo)
-    # Alterna conforme a tentativa — a partir da 4a exportacao costuma ser topo-direita da grade.
+    # Pontos SEGUROS (evitar canto extremo direito = tela cheia).
     pontos = [
-        (0.85, 0.08, "topo-direita da grade/widget"),   # REV.900 no print
-        (0.75, 0.50, "direita do cabecalho"),           # IRAT/FIS
-        (0.92, 0.15, "canto superior direito"),
-        (0.50, 0.40, "centro da grade"),
-        (0.95, 0.05, "extrema topo-direita"),
+        (0.70, 0.45, "direita do cabecalho"),      # IRAT/FIS
+        (0.55, 0.35, "centro-esquerda da grade"),
+        (0.65, 0.12, "topo (antes dos icones)"),   # perto da toolbar, nao no fullscreen
+        (0.40, 0.50, "centro da grade"),
+        (0.78, 0.18, "topo-direita interno"),      # download costuma ficar a esquerda do fullscreen
     ]
-    # Rotaciona a ordem pela estrategia.
     pontos = pontos[estrategia % len(pontos):] + pontos[: estrategia % len(pontos)]
 
     for tipo, alvo in alvos:
         for fx, fy, rotulo in pontos[:3]:
             if _clicar_offset_no_elemento(driver, alvo, fx, fy, f"{tipo}/{rotulo}"):
-                # Hover adicional no topo-direita ajuda a manter a toolbar visivel.
+                # Hover (sem clique) na area da toolbar para ela permanecer.
                 try:
                     w = alvo.size.get("width", 0) or 0
                     h = alvo.size.get("height", 0) or 0
                     ActionChains(driver).move_to_element_with_offset(
-                        alvo, int(w * 0.4), int(-h * 0.35)
-                    ).pause(0.4).perform()
+                        alvo, int(w * 0.30), int(-h * 0.35)
+                    ).pause(0.5).perform()
                 except Exception:
                     pass
                 return True
@@ -814,26 +842,28 @@ def revelar_toolbar_export(driver, estrategia: int = 0) -> bool:
 
 def focar_widget_cubo(driver, estrategia: int = 0) -> None:
     """Seleciona o widget do cubo para exibir a OnDemandToolbar."""
+    sair_tela_cheia(driver)
     if revelar_toolbar_export(driver, estrategia=estrategia):
         return
     try:
         widget = achar_elemento(driver, "widget_cubo", timeout=6, clicavel=False)
-        _clicar_offset_no_elemento(driver, widget, 0.85, 0.1, "widget_cubo topo-direita")
+        _clicar_offset_no_elemento(driver, widget, 0.70, 0.4, "widget_cubo centro-direita")
         return
     except TimeoutException:
         pass
     try:
         grade = achar_elemento(driver, "grade_cubo", timeout=6, clicavel=False)
-        _clicar_offset_no_elemento(driver, grade, 0.9, 0.05, "grade topo-direita")
+        _clicar_offset_no_elemento(driver, grade, 0.55, 0.35, "grade centro")
     except TimeoutException:
         log("Widget/grade do cubo nao localizados.")
 
 
 def achar_botao_exportar_planilha_js(driver):
-    """Procura o botao por aria/title/texto/icone, inclusive shadow DOM."""
+    """Procura o botao de export; ignora tela cheia / maximize."""
     script = """
-    const needles = ['exportar para planilha','export to spreadsheet','planilha','spreadsheet','exportar','download'];
-    const iconNeedles = ['document_export','common-download','metricsExport','download','export'];
+    const iconNeedles = ['document_export','common-download','metricsExport'];
+    const ban = ['tela cheia','fullscreen','maximize','expand','pop-out','popout',
+                 'restaurar','restore','minimize', 'olho', 'eye', 'chart', 'grafico'];
     function texts(el) {
       const uses = Array.from(el.querySelectorAll('use')).map(u =>
         (u.getAttribute('href') || u.getAttribute('xlink:href') || '')
@@ -848,11 +878,15 @@ def achar_botao_exportar_planilha_js(driver):
     }
     function score(el) {
       const t = texts(el);
+      if (ban.some(b => t.includes(b))) return -1;
       let s = 0;
       if (t.includes('exportar para planilha') || t.includes('export to spreadsheet')) s += 100;
       if (t.includes('planilha') || t.includes('spreadsheet')) s += 50;
-      if (iconNeedles.some(n => t.includes(n))) s += 40;
-      if (t.includes('exportar') || t.includes('download')) s += 20;
+      if (iconNeedles.some(n => t.includes(n))) s += 45;
+      if (t.includes('exportar') && t.includes('download')) s += 30;
+      if (t.includes('common-download') || t.includes('document_export')) s += 40;
+      // Evita botoes genericos demais.
+      if (t === 'download' || t.includes('download')) s += 15;
       return s;
     }
     function walk(root, acc) {
@@ -874,27 +908,41 @@ def achar_botao_exportar_planilha_js(driver):
     return driver.execute_script(script)
 
 
+def _parece_botao_tela_cheia(el) -> bool:
+    try:
+        t = " ".join([
+            el.get_attribute("aria-label") or "",
+            el.get_attribute("title") or "",
+            el.text or "",
+        ]).lower()
+        return any(x in t for x in ("tela cheia", "fullscreen", "maximize", "expand", "pop-out"))
+    except Exception:
+        return False
+
+
 def exportar_para_excel(driver) -> None:
     """
     Exporta a exploration aberta para Excel.
-    Alterna pontos de clique: cabecalho (IRAT/FIS) e topo-direita da grade (REV/CTS).
+    Evita clicar no icone de tela cheia (canto extremo direito).
     """
     log("Acionando exportacao para Excel...")
     driver.switch_to.default_content()
-
+    sair_tela_cheia(driver)
     desligar_modo_editar(driver)
 
     botao = None
-    for tentativa in range(0, 6):
-        log(f"Revelando toolbar do cubo (tentativa {tentativa + 1}/6)...")
+    for tentativa in range(0, 5):
+        log(f"Revelando toolbar do cubo (tentativa {tentativa + 1}/5)...")
         focar_widget_cubo(driver, estrategia=tentativa)
         time.sleep(1)
         try:
             botao = achar_elemento(driver, "botao_exportar_planilha", timeout=3)
         except TimeoutException:
             botao = achar_botao_exportar_planilha_js(driver)
-        if botao is not None:
+        if botao is not None and not _parece_botao_tela_cheia(botao):
             break
+        botao = None
+        sair_tela_cheia(driver)
 
     if botao is None:
         log("Botao nao apareceu; tentando menu de contexto na grade...")
@@ -905,23 +953,24 @@ def exportar_para_excel(driver) -> None:
         except Exception as e:
             log(f"Falha no clique direito: {e}")
         if not _clicar_item_menu_por_texto(
-            driver, ["exportar para planilha", "export to spreadsheet", "exportar", "export"],
+            driver, ["exportar para planilha", "export to spreadsheet", "exportar"],
             timeout=8,
         ):
             raise TimeoutException(
-                "Nao encontrei o botao/menu 'Exportar para planilha'. "
-                "Nas views REV/CTS, clique no canto superior direito da grade "
-                "para revelar o icone de download."
+                "Nao encontrei o botao/menu 'Exportar para planilha'."
             )
     else:
+        if _parece_botao_tela_cheia(botao):
+            raise TimeoutException("Seletor pegou o botao de tela cheia; abortando clique.")
         log("Clicando em 'Exportar para planilha'...")
         try:
             ActionChains(driver).move_to_element(botao).pause(0.3).click().perform()
         except Exception:
             clicar(driver, botao)
         time.sleep(3)
+        # Se ainda assim entrou em tela cheia, sai e tenta de novo uma vez.
+        sair_tela_cheia(driver)
 
-    # Se abrir submenu/dialog, escolhe Excel e confirma.
     if _clicar_item_menu_por_texto(driver, ["excel", "xlsx", "planilha"], timeout=5):
         time.sleep(2)
     try:
