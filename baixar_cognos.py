@@ -154,10 +154,9 @@ SELETORES = {
         (By.XPATH, "//*[contains(text(), 'xlsx')]"),
     ],
     "confirmar_exportacao": [
-        (By.XPATH, "//div[contains(@id,'ExportExcelDialog') or contains(@class,'ExportView')]//button[contains(.,'Exportar') or contains(.,'Export') or contains(.,'OK')]"),
-        (By.XPATH, "//button[contains(., 'Exportar')]"),
-        (By.XPATH, "//button[contains(., 'OK')]"),
-        (By.XPATH, "//button[contains(., 'Export')]"),
+        (By.XPATH, "//div[contains(@id,'ExportExcelDialog') or contains(@class,'ExportView') or @role='dialog']//button[contains(.,'Exportar') or contains(.,'Export') or contains(.,'OK')]"),
+        (By.XPATH, "//*[@role='dialog']//button[normalize-space(.)='Exportar' or normalize-space(.)='Export' or normalize-space(.)='OK']"),
+        (By.XPATH, "//button[@type='submit' and (contains(.,'Exportar') or contains(.,'Export'))]"),
     ],
     "grade_cubo": [
         (By.CSS_SELECTOR, "[class*='TM1MDV']"),
@@ -804,26 +803,26 @@ def achar_botao_exportar_planilha(driver, timeout: int = 12):
     return None
 
 
-def clicar_opcao_menu_planilha(driver, timeout: int = 6) -> bool:
-    """Se Exportar abrir menu, escolhe a opcao de planilha/Excel."""
+def clicar_opcao_menu_planilha(driver, timeout: int = 3) -> bool:
+    """Se Exportar abrir menu, escolhe so a opcao explicita de planilha."""
     fim = time.time() + timeout
     while time.time() < fim:
         try:
             opcao = achar_elemento(driver, "opcao_exportar_planilha", timeout=1)
             label = (opcao.text or opcao.get_attribute("aria-label") or "").strip()
             log(f"Clicando opcao do menu: {label or 'Exportar para planilha'}")
-            driver.execute_script("arguments[0].click();", opcao)
+            clicar_nativo(driver, opcao)
             time.sleep(1.5)
             return True
         except TimeoutException:
             el = driver.execute_script(
                 """
-                const want = ['exportar para planilha', 'export to spreadsheet', 'excel', 'xlsx'];
-                const nodes = document.querySelectorAll('[role="menuitem"], [role="option"], li, button, a, span, div');
+                const want = ['exportar para planilha', 'export to spreadsheet'];
+                const nodes = document.querySelectorAll('[role="menuitem"], [role="option"], li, button, a');
                 for (const el of nodes) {
                   const t = ((el.getAttribute('aria-label')||'') + ' ' + (el.textContent||'')).trim().toLowerCase();
                   if (!want.some(w => t.includes(w))) continue;
-                  if (t.length > 80) continue;
+                  if (t.length > 60) continue;
                   const r = el.getBoundingClientRect();
                   if (r.width > 0 && r.height > 0) return el;
                 }
@@ -831,12 +830,46 @@ def clicar_opcao_menu_planilha(driver, timeout: int = 6) -> bool:
                 """
             )
             if el is not None:
-                log("Clicando opcao do menu (JS)...")
-                driver.execute_script("arguments[0].click();", el)
+                log("Clicando opcao do menu (nativo)...")
+                clicar_nativo(driver, el)
                 time.sleep(1.5)
                 return True
-        time.sleep(0.4)
+        time.sleep(0.3)
     return False
+
+
+def clicar_nativo(driver, elemento) -> None:
+    """
+    Clique real de mouse (ActionChains). O PA/Carbon ignora click() via JS
+    em botoes icon-only da toolbar — o tooltip aparece, mas o download nao inicia.
+    """
+    driver.execute_script("arguments[0].scrollIntoView({block:'center'});", elemento)
+    time.sleep(0.2)
+    try:
+        ActionChains(driver).move_to_element(elemento).pause(0.35).click().perform()
+        return
+    except Exception as e:
+        log(f"ActionChains falhou ({e}); tentando click nativo...")
+    try:
+        elemento.click()
+        return
+    except Exception:
+        pass
+    try:
+        elemento.send_keys(Keys.ENTER)
+        return
+    except Exception:
+        pass
+    driver.execute_script(
+        """
+        const el = arguments[0];
+        el.focus();
+        for (const type of ['pointerdown','mousedown','pointerup','mouseup','click']) {
+          el.dispatchEvent(new MouseEvent(type, {bubbles:true, cancelable:true, view:window}));
+        }
+        """,
+        elemento,
+    )
 
 
 def exportar_para_excel(driver) -> None:
@@ -845,8 +878,8 @@ def exportar_para_excel(driver) -> None:
       1) Escape (sair tela cheia se houver)
       2) Desligar Editar
       3) Clicar no titulo do cubo
-      4) Clicar no botao toolbar Exportar (data-id=exportAction)
-      5) Se abrir menu, escolher planilha/Excel; confirmar dialogo se houver
+      4) Clique NATIVO no botao toolbar Exportar (exportAction)
+      5) Menu/dialogo opcionais
     """
     log("Acionando exportacao para Excel (fluxo simples)...")
     driver.switch_to.default_content()
@@ -865,22 +898,20 @@ def exportar_para_excel(driver) -> None:
 
     label = (botao.get_attribute("aria-label") or botao.get_attribute("title") or "").strip()
     data_id = botao.get_attribute("data-id") or ""
-    log(f"Clicando uma vez em: {label or 'Exportar'} (data-id={data_id or '-'})")
-    driver.execute_script("arguments[0].click();", botao)
-    time.sleep(1.5)
+    log(f"Clique nativo em: {label or 'Exportar'} (data-id={data_id or '-'})")
+    clicar_nativo(driver, botao)
+    time.sleep(2)
 
-    # Menu dropdown opcional (Exportar para planilha / Excel).
-    if clicar_opcao_menu_planilha(driver, timeout=5):
+    # Menu dropdown opcional (raro: o proprio botao ja e 'Exportar para planilha').
+    if clicar_opcao_menu_planilha(driver, timeout=2):
         time.sleep(1)
-    else:
-        log("Menu de planilha nao apareceu; seguindo (clique direto pode ja iniciar o download).")
 
-    # Dialogo opcional.
+    # Dialogo opcional de confirmacao (nao confundir com o botao da toolbar).
     try:
-        confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=5)
-        # Evita reclicar o mesmo botao da toolbar.
+        confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=4)
         if (confirmar.get_attribute("data-id") or "") != "exportAction":
-            driver.execute_script("arguments[0].click();", confirmar)
+            log("Confirmando dialogo de exportacao...")
+            clicar_nativo(driver, confirmar)
             time.sleep(1)
     except TimeoutException:
         pass
