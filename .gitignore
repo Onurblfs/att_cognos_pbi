@@ -1,0 +1,23 @@
+# Downloads e backups locais (podem conter dados sensíveis)
+downloads/
+backup/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# IDE / SO
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+Desktop.ini
+
+# Logs e arquivos temporários
+*.log
+*.tmp
+*.crdownload
