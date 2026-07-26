@@ -959,10 +959,41 @@ def _ativo_eh_export(texto: str) -> bool:
     return any(o in texto for o in ok)
 
 
-def exportar_via_tab_enter(driver, max_tabs: int = 40) -> bool:
+def _acionar_elemento_export(driver, el=None) -> None:
+    """Garante o disparo do export: JS click + Enter + Space no elemento focado."""
+    if el is not None:
+        try:
+            driver.execute_script(
+                "arguments[0].scrollIntoView({block:'center'});"
+                "arguments[0].focus();"
+                "arguments[0].click();",
+                el,
+            )
+            log("Clique JS no botao de export executado.")
+        except Exception as e:
+            log(f"Clique JS falhou: {e}")
+            try:
+                ActionChains(driver).move_to_element(el).pause(0.2).click().perform()
+            except Exception:
+                clicar(driver, el)
+
+    # Reforço por teclado no elemento ativo / body.
+    try:
+        ativo = driver.switch_to.active_element
+        ativo.send_keys(Keys.ENTER)
+        time.sleep(0.3)
+        ativo.send_keys(Keys.SPACE)
+    except Exception:
+        try:
+            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ENTER)
+        except Exception:
+            pass
+    time.sleep(2)
+
+
+def exportar_via_tab_enter(driver, max_tabs: int = 50) -> bool:
     """
     Foca o cubo e navega com Tab ate o botao Exportar para planilha, depois Enter.
-    Mais estavel que clique por coordenadas (evita tela cheia).
     """
     log("Tentando export via Tab + Enter...")
     sair_tela_cheia(driver)
@@ -986,20 +1017,18 @@ def exportar_via_tab_enter(driver, max_tabs: int = 40) -> bool:
     body = driver.find_element(By.TAG_NAME, "body")
     for i in range(1, max_tabs + 1):
         body.send_keys(Keys.TAB)
-        time.sleep(0.15)
+        time.sleep(0.18)
         texto = _texto_elemento_ativo(driver)
         if _ativo_eh_export(texto):
             log(f"Foco no export apos {i} Tab(s): {texto[:120]}")
-            body.send_keys(Keys.ENTER)
-            time.sleep(2)
-            # Se abrir submenu, tenta Excel com mais Tab/Enter ou clique por texto.
+            try:
+                ativo = driver.switch_to.active_element
+            except Exception:
+                ativo = None
+            _acionar_elemento_export(driver, ativo)
             if _clicar_item_menu_por_texto(driver, ["excel", "xlsx", "planilha"], timeout=4):
                 time.sleep(1.5)
-            else:
-                # As vezes o proprio Enter ja dispara o download.
-                pass
             return True
-        # Se caiu em tela cheia por engano, sai e continua.
         if any(x in texto for x in ("tela cheia", "fullscreen", "maximize")):
             log("Tab passou por tela cheia; enviando Escape e seguindo...")
             sair_tela_cheia(driver)
@@ -1007,34 +1036,15 @@ def exportar_via_tab_enter(driver, max_tabs: int = 40) -> bool:
     return False
 
 
-def exportar_para_excel(driver) -> None:
-    """
-    Exporta a exploration aberta para Excel.
-    Preferencia: Tab + Enter (mais estavel). Fallback: localizar botao e clicar.
-    """
-    log("Acionando exportacao para Excel...")
-    driver.switch_to.default_content()
-    sair_tela_cheia(driver)
-    desligar_modo_editar(driver)
-
-    if exportar_via_tab_enter(driver):
-        try:
-            confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=6)
-            clicar(driver, confirmar)
-            time.sleep(2)
-        except TimeoutException:
-            pass
-        log("Exportacao acionada (Tab+Enter); aguardando arquivo baixar.")
-        return
-
-    # Fallback antigo por clique no botao (sem canto de tela cheia).
-    log("Fallback: tentando localizar botao de export por seletor...")
+def exportar_por_seletor(driver) -> bool:
+    """Localiza o botao Exportar para planilha e aciona com clique JS."""
+    log("Tentando export pelo seletor do botao...")
     botao = None
     for tentativa in range(0, 4):
         focar_widget_cubo(driver, estrategia=tentativa)
         time.sleep(1)
         try:
-            botao = achar_elemento(driver, "botao_exportar_planilha", timeout=3)
+            botao = achar_elemento(driver, "botao_exportar_planilha", timeout=4)
         except TimeoutException:
             botao = achar_botao_exportar_planilha_js(driver)
         if botao is not None and not _parece_botao_tela_cheia(botao):
@@ -1043,20 +1053,46 @@ def exportar_para_excel(driver) -> None:
         sair_tela_cheia(driver)
 
     if botao is None:
+        return False
+
+    # Confirma pelo texto/aria antes de clicar.
+    try:
+        meta = " ".join([
+            botao.get_attribute("aria-label") or "",
+            botao.get_attribute("title") or "",
+            botao.text or "",
+        ])
+        log(f"Botao candidato: {meta[:140]}")
+    except Exception:
+        pass
+
+    _acionar_elemento_export(driver, botao)
+    sair_tela_cheia(driver)
+    if _clicar_item_menu_por_texto(driver, ["excel", "xlsx", "planilha"], timeout=5):
+        time.sleep(1.5)
+    return True
+
+
+def exportar_para_excel(driver) -> None:
+    """
+    Exporta a exploration aberta para Excel.
+    1) Seletor direto + clique JS (mais rapido quando o botao ja esta visivel)
+    2) Tab + Enter
+    """
+    log("Acionando exportacao para Excel...")
+    driver.switch_to.default_content()
+    sair_tela_cheia(driver)
+    desligar_modo_editar(driver)
+
+    # Primeiro tenta achar o botao ja visivel (como no seu print com tooltip).
+    ok = exportar_por_seletor(driver)
+    if not ok:
+        ok = exportar_via_tab_enter(driver)
+    if not ok:
         raise TimeoutException(
-            "Nao encontrei o botao/menu 'Exportar para planilha' (Tab+Enter e clique falharam)."
+            "Nao consegui acionar 'Exportar para planilha' (seletor e Tab+Enter falharam)."
         )
 
-    log("Clicando em 'Exportar para planilha'...")
-    try:
-        ActionChains(driver).move_to_element(botao).pause(0.3).click().perform()
-    except Exception:
-        clicar(driver, botao)
-    time.sleep(3)
-    sair_tela_cheia(driver)
-
-    if _clicar_item_menu_por_texto(driver, ["excel", "xlsx", "planilha"], timeout=5):
-        time.sleep(2)
     try:
         confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=6)
         clicar(driver, confirmar)
