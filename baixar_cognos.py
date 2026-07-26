@@ -93,6 +93,29 @@ SELETORES = {
         (By.XPATH, "//*[contains(.,'IBM Planning Analytics')]"),
         (By.CSS_SELECTOR, "#com\\.ibm\\.bi\\.glass\\.common\\.navmenu"),
     ],
+    "campo_usuario": [
+        (By.CSS_SELECTOR, "input[name='username']"),
+        (By.CSS_SELECTOR, "input#username"),
+        (By.CSS_SELECTOR, "input[name='CAMUsername']"),
+        (By.CSS_SELECTOR, "input#CAMUsername"),
+        (By.CSS_SELECTOR, "input[autocomplete='username']"),
+        (By.XPATH, "//input[@type='text' or @type='email'][contains(@name,'ser') or contains(@id,'ser') or contains(@placeholder,'suário') or contains(@placeholder,'ser')]"),
+        (By.XPATH, "//label[contains(.,'suário') or contains(.,'User')]/following::input[1]"),
+    ],
+    "campo_senha": [
+        (By.CSS_SELECTOR, "input[type='password']"),
+        (By.CSS_SELECTOR, "input[name='password']"),
+        (By.CSS_SELECTOR, "input#password"),
+        (By.CSS_SELECTOR, "input[name='CAMPassword']"),
+        (By.CSS_SELECTOR, "input#CAMPassword"),
+    ],
+    "botao_login": [
+        (By.XPATH, "//button[@type='submit']"),
+        (By.XPATH, "//input[@type='submit']"),
+        (By.XPATH, "//button[contains(.,'Entrar') or contains(.,'Login') or contains(.,'Sign in') or contains(.,'Log in')]"),
+        (By.XPATH, "//input[@value='Entrar' or @value='Login' or @value='Sign in']"),
+        (By.CSS_SELECTOR, "button.login, #loginButton, .signInBtn"),
+    ],
     # Botao da toolbar on-demand do cubo (tooltip Claro: "Exportar para planilha").
     # So aparece apos selecionar o widget e com Editar DESLIGADO.
     "botao_exportar_planilha": [
@@ -334,17 +357,99 @@ def salvar_debug(driver, pasta: Path, rotulo: str, erro: str | None = None) -> P
     return base
 
 
-def aguardar_login(driver, timeout: int) -> None:
-    """Espera ate a home do PA carregar (apos login manual/SSO)."""
-    log("Aguardando login... Se aparecer a tela de login, entre com seu usuario.")
+def carregar_credenciais(caminho: str | Path | None) -> tuple[str, str] | None:
+    """
+    Le arquivo de credenciais: 1a linha = login, 2a linha = senha.
+    Nunca imprime a senha.
+    """
+    if not caminho:
+        return None
+    path = Path(caminho).expanduser()
+    if not path.exists():
+        log(f"Arquivo de credenciais nao encontrado: {path}")
+        return None
+    linhas = [
+        ln.strip()
+        for ln in path.read_text(encoding="utf-8-sig").splitlines()
+        if ln.strip()
+    ]
+    if len(linhas) < 2:
+        raise ValueError(
+            f"Arquivo de credenciais invalido ({path}). "
+            "Esperado: 1a linha login, 2a linha senha."
+        )
+    usuario, senha = linhas[0], linhas[1]
+    log(f"Credenciais carregadas para usuario: {usuario}")
+    return usuario, senha
+
+
+def home_ja_carregada(driver) -> bool:
+    for by, seletor in SELETORES["home_carregada"]:
+        try:
+            if driver.find_elements(by, seletor):
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def fazer_login(driver, usuario: str, senha: str, timeout: int = 60) -> bool:
+    """Preenche usuario/senha na tela de login do PA, se ela aparecer."""
+    fim = time.time() + timeout
+    while time.time() < fim:
+        if home_ja_carregada(driver):
+            return True
+        try:
+            campo_user = achar_elemento(driver, "campo_usuario", timeout=3)
+            campo_pass = achar_elemento(driver, "campo_senha", timeout=3)
+        except TimeoutException:
+            time.sleep(1)
+            continue
+
+        log("Tela de login detectada; preenchendo credenciais...")
+        try:
+            campo_user.clear()
+        except Exception:
+            pass
+        campo_user.send_keys(usuario)
+        time.sleep(0.3)
+        try:
+            campo_pass.clear()
+        except Exception:
+            pass
+        campo_pass.send_keys(senha)
+        time.sleep(0.3)
+        try:
+            botao = achar_elemento(driver, "botao_login", timeout=5)
+            clicar(driver, botao)
+        except TimeoutException:
+            campo_pass.send_keys(Keys.ENTER)
+        log("Credenciais enviadas; aguardando home carregar...")
+        return True
+    return False
+
+
+def aguardar_login(
+    driver,
+    timeout: int,
+    arquivo_credenciais: str | Path | None = None,
+) -> None:
+    """Faz login automatico (se houver arquivo) e espera a home carregar."""
+    creds = carregar_credenciais(arquivo_credenciais)
+    if creds:
+        usuario, senha = creds
+        if not fazer_login(driver, usuario, senha, timeout=min(60, timeout)):
+            log("Formulario de login nao apareceu a tempo; seguindo aguardando home...")
+    else:
+        log("Aguardando login manual... Se aparecer a tela de login, entre com seu usuario.")
+
     fim = time.time() + timeout
     while time.time() < fim:
         try:
-            for by, seletor in SELETORES["home_carregada"]:
-                if driver.find_elements(by, seletor):
-                    log("Login concluido, pagina inicial carregada.")
-                    time.sleep(3)
-                    return
+            if home_ja_carregada(driver):
+                log("Login concluido, pagina inicial carregada.")
+                time.sleep(3)
+                return
         except Exception:
             pass
         time.sleep(2)
@@ -858,7 +963,11 @@ def main() -> int:
     resultados = []
     try:
         driver.get(cfg["url"])
-        aguardar_login(driver, cfg["timeout_login_segundos"])
+        aguardar_login(
+            driver,
+            cfg["timeout_login_segundos"],
+            arquivo_credenciais=cfg.get("arquivo_credenciais"),
+        )
 
         for job in jobs:
             log("=" * 60)
