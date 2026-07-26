@@ -93,15 +93,26 @@ SELETORES = {
         (By.XPATH, "//*[contains(.,'IBM Planning Analytics')]"),
         (By.CSS_SELECTOR, "#com\\.ibm\\.bi\\.glass\\.common\\.navmenu"),
     ],
-    # Botao da toolbar do cubo (tooltip visto na Claro: "Exportar para planilha").
+    # Botao da toolbar on-demand do cubo (tooltip Claro: "Exportar para planilha").
+    # So aparece apos selecionar o widget e com Editar DESLIGADO.
     "botao_exportar_planilha": [
         (By.XPATH, "//*[@aria-label='Exportar para planilha' or @title='Exportar para planilha']"),
         (By.XPATH, "//button[contains(@aria-label,'Exportar para planilha') or contains(@title,'Exportar para planilha')]"),
         (By.XPATH, "//*[contains(@aria-label,'Export to spreadsheet') or contains(@title,'Export to spreadsheet')]"),
-        (By.XPATH, "//button[contains(@aria-label,'planilha') or contains(@title,'planilha')]"),
-        (By.XPATH, "//*[@aria-label='Exportar' or @title='Exportar']"),
+        (By.XPATH, "//*[contains(@aria-label,'planilha') or contains(@title,'planilha')]"),
+        (By.XPATH, "//button[.//span[contains(@class,'assistive') and contains(.,'planilha')]]"),
+        (By.XPATH, "//button[.//span[contains(@class,'assistive') and contains(.,'Exportar')]]"),
+        (By.XPATH, "//*[contains(@class,'OnDemandToolbar') or contains(@class,'toolbarDock')]//button"),
         (By.XPATH, "//button[.//use[contains(@*,'document_export') or contains(@*,'common-download') or contains(@*,'metricsExport')]]"),
-        (By.XPATH, "//*[.//use[contains(@*,'document_export') or contains(@*,'common-download')]]"),
+    ],
+    "toggle_editar": [
+        (By.CSS_SELECTOR, "input[id*='editToggleButton']"),
+        (By.XPATH, "//input[contains(@id,'editToggleButton')]"),
+    ],
+    "widget_cubo": [
+        (By.XPATH, "//*[contains(@aria-label,'Visualização do cubo') or contains(@aria-label,'Visualizacao do cubo')]"),
+        (By.XPATH, "//*[contains(@aria-label,'Cube view') or contains(@aria-label,'cube view')]"),
+        (By.CSS_SELECTOR, "[aria-label*='IRAT.'], [aria-label*='FIS.'], [aria-label*='REV.'], [aria-label*='CTS.']"),
     ],
     "menu_exportar": [
         (By.XPATH, "//*[self::button or self::span or self::a or self::li or self::div][normalize-space(.)='Exportar' or normalize-space(.)='Export']"),
@@ -493,11 +504,16 @@ def achar_resultado(driver, nome_busca: str, timeout: int = 30):
     """
     literais = xpath_literal(nome_busca)
     # Trechos distintivos do nome (evita depender do texto truncado).
+    # NAO usar sufixos genericos como "(Power BI)" — batem em varias views.
     trechos = [nome_busca]
     if "(" in nome_busca and nome_busca.endswith(")"):
-        trechos.append(nome_busca[nome_busca.rfind("(") :])  # ex.: (irat950)
-    if " - " in nome_busca:
-        trechos.append(nome_busca.split(" - ")[0].strip())
+        sufixo = nome_busca[nome_busca.rfind("(") :]
+        if sufixo.lower() not in {"(power bi)", "(tableau)", "(cognos)"}:
+            trechos.append(sufixo)  # ex.: (irat950)
+    # Codigo do cubo no inicio do nome, se houver (CTS.100, REV.420, etc.).
+    primeiro = nome_busca.split()[0]
+    if "." in primeiro and len(primeiro) >= 5:
+        trechos.append(primeiro)
 
     candidatos_xpath = [
         f"//*[@title={literais} or @aria-label={literais}]",
@@ -571,43 +587,123 @@ def _clicar_item_menu_por_texto(driver, textos, timeout: int = 10) -> bool:
     return False
 
 
+def desligar_modo_editar(driver) -> None:
+    """O botao Exportar para planilha so aparece com Editar desligado."""
+    try:
+        toggle = achar_elemento(driver, "toggle_editar", timeout=5, clicavel=False)
+    except TimeoutException:
+        return
+    try:
+        if toggle.is_selected():
+            log("Desligando modo Editar...")
+            # Clica no label/toggle via JS (input checkbox as vezes nao e clicavel).
+            driver.execute_script(
+                "arguments[0].click();"
+                "arguments[0].dispatchEvent(new Event('change',{bubbles:true}));",
+                toggle,
+            )
+            time.sleep(2)
+    except Exception as e:
+        log(f"Nao foi possivel desligar Editar: {e}")
+
+
+def focar_widget_cubo(driver) -> None:
+    """Seleciona o widget do cubo para exibir a OnDemandToolbar."""
+    try:
+        widget = achar_elemento(driver, "widget_cubo", timeout=10, clicavel=False)
+        clicar(driver, widget)
+        time.sleep(1.5)
+        return
+    except TimeoutException:
+        pass
+    try:
+        grade = achar_elemento(driver, "grade_cubo", timeout=10, clicavel=False)
+        clicar(driver, grade)
+        time.sleep(1.5)
+    except TimeoutException:
+        log("Widget/grade do cubo nao localizados.")
+
+
+def achar_botao_exportar_planilha_js(driver):
+    """Procura o botao por aria/title/texto, inclusive shadow DOM."""
+    script = """
+    const needles = ['exportar para planilha','export to spreadsheet','planilha','spreadsheet'];
+    function texts(el) {
+      return [
+        el.getAttribute('aria-label') || '',
+        el.getAttribute('title') || '',
+        el.innerText || '',
+        ...(Array.from(el.querySelectorAll('span')).map(s => s.textContent || ''))
+      ].join(' | ').toLowerCase();
+    }
+    function walk(root) {
+      const nodes = root.querySelectorAll('button, [role="button"], a');
+      for (const el of nodes) {
+        const t = texts(el);
+        if (needles.some(n => t.includes(n))) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0) return el;
+        }
+      }
+      for (const el of root.querySelectorAll('*')) {
+        if (el.shadowRoot) {
+          const found = walk(el.shadowRoot);
+          if (found) return found;
+        }
+      }
+      return null;
+    }
+    return walk(document);
+    """
+    return driver.execute_script(script)
+
+
 def exportar_para_excel(driver) -> None:
     """
     Exporta a exploration aberta para Excel.
-    Na Claro o botao da toolbar do cubo e 'Exportar para planilha' (icone download).
+    Na Claro: desliga Editar -> seleciona o cubo -> clica 'Exportar para planilha'.
     """
     log("Acionando exportacao para Excel...")
     driver.switch_to.default_content()
 
-    # 1) Foca a grade do cubo (traz a toolbar do widget).
-    try:
-        grade = achar_elemento(driver, "grade_cubo", timeout=15, clicavel=False)
-        clicar(driver, grade)
-        time.sleep(1.5)
-    except TimeoutException:
-        log("Grade do cubo nao localizada; tentando achar o botao de export mesmo assim.")
+    desligar_modo_editar(driver)
+    focar_widget_cubo(driver)
 
-    # 2) Caminho principal: botao "Exportar para planilha".
-    try:
-        botao = achar_elemento(driver, "botao_exportar_planilha", timeout=20)
-        log("Clicando em 'Exportar para planilha'...")
-        clicar(driver, botao)
-        time.sleep(3)
-    except TimeoutException:
-        # 3) Fallback: clique direito -> Exportar
-        log("Botao 'Exportar para planilha' nao encontrado; tentando menu de contexto...")
+    botao = None
+    fim = time.time() + 25
+    while time.time() < fim and botao is None:
+        try:
+            botao = achar_elemento(driver, "botao_exportar_planilha", timeout=2)
+        except TimeoutException:
+            botao = achar_botao_exportar_planilha_js(driver)
+        if botao is None:
+            # Re-foca o widget; a toolbar on-demand às vezes some.
+            focar_widget_cubo(driver)
+            time.sleep(1)
+
+    if botao is None:
+        log("Botao nao apareceu; tentando menu de contexto na grade...")
         try:
             grade = achar_elemento(driver, "grade_cubo", timeout=5, clicavel=False)
-            ActionChains(driver).context_click(grade).perform()
+            ActionChains(driver).move_to_element(grade).context_click().perform()
             time.sleep(1.5)
         except Exception as e:
             log(f"Falha no clique direito: {e}")
         if not _clicar_item_menu_por_texto(
-            driver, ["exportar para planilha", "exportar", "export"], timeout=8
+            driver, ["exportar para planilha", "export to spreadsheet", "exportar", "export"],
+            timeout=8,
         ):
             raise TimeoutException(
-                "Nao encontrei o botao/menu 'Exportar para planilha' na view aberta."
+                "Nao encontrei o botao/menu 'Exportar para planilha' na view aberta. "
+                "Confirme que o modo Editar esta desligado e o cubo esta selecionado."
             )
+    else:
+        log("Clicando em 'Exportar para planilha'...")
+        try:
+            ActionChains(driver).move_to_element(botao).pause(0.3).click().perform()
+        except Exception:
+            clicar(driver, botao)
+        time.sleep(3)
 
     # Se abrir submenu/dialog, escolhe Excel e confirma.
     if _clicar_item_menu_por_texto(driver, ["excel", "xlsx", "planilha"], timeout=5):
