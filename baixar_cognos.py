@@ -1191,6 +1191,23 @@ def nome_arquivo_final(job: dict, arquivo: Path) -> str:
     return f"{base}{ext}"
 
 
+def limpar_pasta_downloads(pasta: Path) -> None:
+    """Apaga arquivos da pasta de downloads antes de iniciar as exportacoes."""
+    pasta.mkdir(parents=True, exist_ok=True)
+    removidos = 0
+    for p in pasta.iterdir():
+        try:
+            if p.is_file():
+                p.unlink()
+                removidos += 1
+            elif p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+                removidos += 1
+        except Exception as e:
+            log(f"Nao foi possivel apagar {p.name}: {e}")
+    log(f"Pasta de downloads limpa ({removidos} item(ns) removido(s)): {pasta}")
+
+
 def renomear_download(arquivo: Path, job: dict) -> Path:
     """Renomeia o arquivo baixado para o nome da view compartilhada."""
     nome = nome_arquivo_final(job, arquivo)
@@ -1210,7 +1227,8 @@ def mover_para_destino(arquivo: Path, job: dict, pasta_backup: Path) -> Path:
     if not destino_dir.exists():
         raise FileNotFoundError(
             f"Pasta de destino inacessivel: {destino_dir}\n"
-            "Verifique a conexao com a rede corporativa (VPN)."
+            "Verifique a conexao com a rede corporativa (VPN).\n"
+            f"O Excel JA FOI exportado e permanece em: {arquivo}"
         )
 
     nome_final = nome_arquivo_final(job, arquivo)
@@ -1238,6 +1256,8 @@ def main() -> int:
                         help="Baixa os arquivos mas nao copia para a pasta de rede.")
     parser.add_argument("--debug", action="store_true",
                         help="Salva screenshot/HTML/inputs quando falhar e para no 1o erro.")
+    parser.add_argument("--nao-limpar", action="store_true",
+                        help="Nao limpa a pasta downloads antes de comecar.")
     args = parser.parse_args()
 
     cfg = carregar_config(Path(args.config))
@@ -1253,6 +1273,11 @@ def main() -> int:
         if not jobs:
             log(f"Nenhuma exportacao corresponde ao filtro '{args.somente}'.")
             return 1
+
+    if not args.nao_limpar:
+        limpar_pasta_downloads(pasta_downloads)
+    else:
+        log("Pasta de downloads NAO foi limpa (--nao-limpar).")
 
     log(f"Iniciando automacao: {len(jobs)} exportacao(oes).")
     driver = criar_driver(pasta_downloads)
@@ -1285,9 +1310,24 @@ def main() -> int:
                 arquivo = renomear_download(arquivo, job)
                 if args.sem_mover:
                     log(f"(--sem-mover) Arquivo mantido em: {arquivo}")
+                    resultados.append((job["nome"], f"OK (download): {arquivo.name}"))
                 else:
-                    mover_para_destino(arquivo, job, pasta_backup)
-                resultados.append((job["nome"], "OK"))
+                    try:
+                        mover_para_destino(arquivo, job, pasta_backup)
+                        resultados.append((job["nome"], "OK"))
+                    except FileNotFoundError as e_rede:
+                        # Exportacao OK; so a copia para a rede falhou.
+                        log(f"EXPORTACAO OK, mas falha ao mover para a rede: {e_rede}")
+                        resultados.append(
+                            (job["nome"], f"OK download; ERRO rede: {arquivo.name}")
+                        )
+                        if args.debug:
+                            salvar_debug(
+                                driver,
+                                pasta_debug,
+                                job["nome"].replace("/", "-")[:40],
+                                erro=str(e_rede),
+                            )
                 # Volta para a home para a proxima exportacao.
                 driver.get(cfg["url"])
                 time.sleep(6)
@@ -1318,8 +1358,12 @@ def main() -> int:
     houve_erro = False
     for nome, status in resultados:
         log(f"  {nome}: {status}")
-        if status != "OK":
+        if status.startswith("ERRO") or "ERRO rede" in status:
             houve_erro = True
+    if pasta_downloads.exists():
+        restantes = sorted(p.name for p in pasta_downloads.iterdir() if p.is_file())
+        if restantes:
+            log(f"Arquivos em downloads/: {', '.join(restantes)}")
     return 1 if houve_erro else 0
 
 
