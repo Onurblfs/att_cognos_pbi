@@ -1253,7 +1253,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Baixa as bases do Cognos/Planning Analytics.")
     parser.add_argument("--config", default=str(BASE_DIR / "config.json"))
     parser.add_argument("--somente", default=None,
-                        help="Executa apenas exportacoes cujo nome contenha este texto.")
+                        help="Executa apenas exportacoes cujo nome contenha este texto. "
+                             "Use virgula para varios: Receitas,Fisicos")
     parser.add_argument("--sem-mover", action="store_true",
                         help="Baixa os arquivos mas nao copia para a pasta de rede.")
     parser.add_argument("--debug", action="store_true",
@@ -1270,11 +1271,18 @@ def main() -> int:
 
     jobs = cfg["exportacoes"]
     if args.somente:
-        filtro = args.somente.lower()
-        jobs = [j for j in jobs if filtro in j["nome"].lower() or filtro in j["nome_busca"].lower()]
+        filtros = [f.strip().lower() for f in args.somente.split(",") if f.strip()]
+        jobs = [
+            j for j in jobs
+            if any(
+                f in j["nome"].lower() or f in j["nome_busca"].lower()
+                for f in filtros
+            )
+        ]
         if not jobs:
             log(f"Nenhuma exportacao corresponde ao filtro '{args.somente}'.")
             return 1
+        log(f"Filtro --somente: {', '.join(filtros)} -> {len(jobs)} job(s)")
 
     if not args.nao_limpar:
         limpar_pasta_downloads(pasta_downloads)

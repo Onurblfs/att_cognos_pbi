@@ -30,29 +30,65 @@ echo Python: %PYTHON%
 echo Pasta:  %CD%
 echo.
 
-echo Escolha o modo de execucao:
-echo   1^) Todas as exportacoes ^(copia para a rede^)
-echo   2^) Todas as exportacoes ^(so download, --sem-mover^)
-echo   3^) Somente Custos ^(IRAT.950 Custo^) --sem-mover
-echo   4^) Somente Pre-Pago --sem-mover
-echo   5^) Personalizado ^(voce digita os argumentos^)
-echo   0^) Sair
+echo O que deseja atualizar?
 echo.
-set /p "OPCAO=Opcao: "
+echo   1^) Receita  = Receita DRE PowerBI V2 ^(irat950^)
+echo   2^) Fisico   = Fisico Receita - FIS 900 ^(Power BI^)
+echo   3^) Receita + Fisico
+echo   0^) Tudo ^(as 6 exportacoes^)
+echo.
+set /p "ESCOPO=Opcao: "
 
-set "ARGS="
-if "%OPCAO%"=="0" exit /b 0
-if "%OPCAO%"=="1" set "ARGS="
-if "%OPCAO%"=="2" set "ARGS=--sem-mover"
-if "%OPCAO%"=="3" set "ARGS=--sem-mover --somente Custo"
-if "%OPCAO%"=="4" set "ARGS=--sem-mover --somente Pre-Pago"
-if "%OPCAO%"=="5" (
-  set /p "ARGS=Argumentos para baixar_cognos.py: "
-)
-if not "%OPCAO%"=="1" if not "%OPCAO%"=="2" if not "%OPCAO%"=="3" if not "%OPCAO%"=="4" if not "%OPCAO%"=="5" (
-  echo Opcao invalida.
+set "FILTRO="
+set "DESC="
+if "%ESCOPO%"=="1" (
+  set "FILTRO=--somente Receitas"
+  set "DESC=Receita DRE PowerBI V2 (irat950)"
+) else if "%ESCOPO%"=="2" (
+  set "FILTRO=--somente Fisicos"
+  set "DESC=Fisico Receita - FIS 900 (Power BI)"
+) else if "%ESCOPO%"=="3" (
+  set "FILTRO=--somente Receitas,Fisicos"
+  set "DESC=Receita + Fisico"
+) else if "%ESCOPO%"=="0" (
+  set "FILTRO="
+  set "DESC=Todas as exportacoes"
+) else (
+  echo Opcao invalida. Use 0, 1, 2 ou 3.
   pause
   exit /b 1
+)
+
+echo.
+echo Copiar os arquivos para a pasta de rede \\10.29.2.2\... ?
+echo   S^) Sim ^(copia para a rede^)
+echo   N^) Nao ^(so download local em downloads\^)
+echo.
+set /p "MOVER=Opcao [S/N]: "
+
+set "MOVER_ARG="
+if /i "%MOVER%"=="N" set "MOVER_ARG=--sem-mover"
+if /i "%MOVER%"=="NAO" set "MOVER_ARG=--sem-mover"
+if /i "%MOVER%"=="NÃO" set "MOVER_ARG=--sem-mover"
+
+set "ARGS=%FILTRO% %MOVER_ARG%"
+
+echo.
+echo ------------------------------------------------------------------------
+echo   Atualizar: %DESC%
+if defined MOVER_ARG (
+  echo   Destino:   downloads\ local ^(sem copiar para a rede^)
+) else (
+  echo   Destino:   pasta de rede + downloads\
+)
+echo   Comando:   baixar_cognos.py %ARGS%
+echo ------------------------------------------------------------------------
+echo.
+set /p "CONF=Confirmar e iniciar? [S/N]: "
+if /i not "%CONF%"=="S" if /i not "%CONF%"=="SIM" (
+  echo Cancelado.
+  pause
+  exit /b 0
 )
 
 echo.
@@ -63,7 +99,7 @@ REM Pequena pausa para o painel abrir antes do Python gravar o JSON
 timeout /t 2 /nobreak >nul
 
 echo.
-echo Executando: baixar_cognos.py %ARGS%
+echo Executando...
 echo ------------------------------------------------------------------------
 "%PYTHON%" -u baixar_cognos.py %ARGS%
 set "RC=%ERRORLEVEL%"
