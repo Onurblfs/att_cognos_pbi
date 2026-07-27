@@ -5,6 +5,7 @@
   "pasta_backup": "backup",
   "timeout_login_segundos": 300,
   "timeout_download_segundos": 600,
+  "timeout_dashboard_segundos": 120,
   "exportacoes": [
     {
       "nome": "Receitas (IRAT.950)",

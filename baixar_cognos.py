@@ -28,7 +28,7 @@ from datetime import datetime
 from pathlib import Path
 
 from selenium import webdriver
-from selenium.common.exceptions import TimeoutException
+from selenium.common.exceptions import StaleElementReferenceException, TimeoutException
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -598,7 +598,7 @@ def abrir_compartilhado(driver, pasta_debug: Path | None = None) -> None:
         raise
 
 
-def abrir_por_dashboard_id(driver, base_url: str, dashboard_id: str) -> bool:
+def abrir_por_dashboard_id(driver, base_url: str, dashboard_id: str, timeout: int = 90) -> bool:
     """Abre a view direto pela URL do dashboard (mais estavel que tile/pesquisa)."""
     if not dashboard_id:
         return False
@@ -607,10 +607,61 @@ def abrir_por_dashboard_id(driver, base_url: str, dashboard_id: str) -> bool:
     url = f"{root}/?perspective=dashboard&id={dashboard_id}"
     log(f"Abrindo dashboard direto: {url}")
     driver.get(url)
-    time.sleep(12)
-    if "perspective=dashboard" in driver.current_url:
-        return True
-    return False
+    time.sleep(5)
+    if "perspective=dashboard" not in driver.current_url:
+        return False
+    aguardar_dashboard_pronto(driver, timeout=timeout)
+    return True
+
+
+def aguardar_dashboard_pronto(driver, timeout: int = 90) -> None:
+    """
+    Espera o dashboard terminar de carregar (Custos demora mais que Receitas/Fisicos).
+    Criterio: grade TM1 visivel + sem spinner/loading por alguns segundos seguidos.
+    """
+    log(f"Aguardando dashboard carregar por completo (ate {timeout}s)...")
+    fim = time.time() + timeout
+    estavel = 0
+    while time.time() < fim:
+        try:
+            pronto = driver.execute_script(
+                """
+                const isVisible = (el) => {
+                  if (!el) return false;
+                  const r = el.getBoundingClientRect();
+                  const st = window.getComputedStyle(el);
+                  return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none';
+                };
+                const loaders = document.querySelectorAll(
+                  '[class*="loading"], [class*="Loading"], [class*="spinner"], [class*="Spinner"],'
+                  + '[class*="BusyIndicator"], [class*="busy"], .bx--loading, [aria-busy="true"]'
+                );
+                for (const el of loaders) {
+                  if (isVisible(el)) return {ok:false, why:'loading'};
+                }
+                const grid = document.querySelector(
+                  '[id*="TM1MDV"], [class*="CubeView"], [class*="pa--dimensionoverview"], [class*="TM1MDV"]'
+                );
+                if (!grid || !isVisible(grid)) return {ok:false, why:'sem-grade'};
+                // Titulo da aba/dashboard ajuda a saber se a view certa montou.
+                const title = (document.title || '').trim();
+                return {ok:true, title: title};
+                """
+            )
+        except Exception:
+            pronto = {"ok": False, "why": "script"}
+        if pronto and pronto.get("ok"):
+            estavel += 1
+            if estavel >= 4:  # ~4s estavel
+                log(f"Dashboard pronto (title='{pronto.get('title') or driver.title}').")
+                time.sleep(1.5)  # folga extra apos estabilizar
+                return
+        else:
+            if estavel:
+                log("Dashboard ainda oscilando (reload parcial); continuando a esperar...")
+            estavel = 0
+        time.sleep(1)
+    log("Timeout aguardando dashboard estabilizar; seguindo com o que houver na tela.")
 
 
 def pesquisar_e_abrir(
@@ -619,17 +670,21 @@ def pesquisar_e_abrir(
     pasta_debug: Path | None = None,
     dashboard_id: str | None = None,
     base_url: str | None = None,
+    timeout_dashboard: int = 90,
 ) -> None:
     """Abre a view: URL direta > tile na home > pesquisa no Compartilhado."""
     log(f"Abrindo view: {nome_busca}")
 
-    if dashboard_id and base_url and abrir_por_dashboard_id(driver, base_url, dashboard_id):
+    if dashboard_id and base_url and abrir_por_dashboard_id(
+        driver, base_url, dashboard_id, timeout=timeout_dashboard
+    ):
         log("View aberta via dashboard_id.")
         validar_dashboard_aberto(driver, nome_busca)
         return
 
     if abrir_por_tile(driver, nome_busca):
         log("View aberta via tile da home.")
+        aguardar_dashboard_pronto(driver, timeout=timeout_dashboard)
         validar_dashboard_aberto(driver, nome_busca)
         return
 
@@ -668,7 +723,7 @@ def pesquisar_e_abrir(
     except Exception:
         clicar(driver, resultado)
     log("View aberta via pesquisa no Compartilhado. Aguardando carregar...")
-    time.sleep(10)
+    aguardar_dashboard_pronto(driver, timeout=timeout_dashboard)
     validar_dashboard_aberto(driver, nome_busca)
 
 
@@ -912,24 +967,29 @@ def achar_botao_exportar_planilha(driver, timeout: int = 12):
     return None
 
 
-def garantir_toolbar_exportacao(driver, tentativas: int = 4):
+def garantir_toolbar_exportacao(driver, tentativas: int = 6):
     """Desliga Editar, seleciona o cubo e espera o botao Exportar aparecer."""
     botao = None
     for i in range(1, tentativas + 1):
-        desligar_modo_editar(driver)
-        selecionar_cubo(driver)
-        botao = achar_botao_exportar_planilha(driver, timeout=8)
-        if botao is not None:
-            return botao
+        try:
+            desligar_modo_editar(driver)
+            selecionar_cubo(driver)
+            botao = achar_botao_exportar_planilha(driver, timeout=10)
+            if botao is not None:
+                return botao
+        except StaleElementReferenceException:
+            log("DOM regenerou durante selecao (stale); aguardando e tentando de novo...")
+            time.sleep(2)
+            continue
         log(f"Toolbar Exportar ainda ausente (tentativa {i}/{tentativas}); selecionando de novo...")
         # Clique extra na grade (Custos nao expoe o titulo do cubo).
         try:
             grade = driver.execute_script(
                 """
                 const cands = [
-                  ...document.querySelectorAll('[id*=\"TM1MDV\"]'),
-                  ...document.querySelectorAll('[class*=\"CubeView\"]'),
-                  ...document.querySelectorAll('[class*=\"pa--dimensionoverview\"]'),
+                  ...document.querySelectorAll('[id*="TM1MDV"]'),
+                  ...document.querySelectorAll('[class*="CubeView"]'),
+                  ...document.querySelectorAll('[class*="pa--dimensionoverview"]'),
                 ];
                 for (const el of cands) {
                   const r = el.getBoundingClientRect();
@@ -940,7 +1000,9 @@ def garantir_toolbar_exportacao(driver, tentativas: int = 4):
             )
             if grade is not None:
                 ActionChains(driver).move_to_element(grade).pause(0.2).click().perform()
-                time.sleep(1.2)
+                time.sleep(1.5)
+        except StaleElementReferenceException:
+            time.sleep(2)
         except Exception:
             pass
     return botao
@@ -957,6 +1019,9 @@ def clicar_opcao_menu_planilha(driver, timeout: int = 3) -> bool:
             clicar_nativo(driver, opcao)
             time.sleep(1.5)
             return True
+        except StaleElementReferenceException:
+            time.sleep(0.5)
+            continue
         except TimeoutException:
             el = driver.execute_script(
                 """
@@ -974,9 +1039,12 @@ def clicar_opcao_menu_planilha(driver, timeout: int = 3) -> bool:
             )
             if el is not None:
                 log("Clicando opcao do menu (nativo)...")
-                clicar_nativo(driver, el)
-                time.sleep(1.5)
-                return True
+                try:
+                    clicar_nativo(driver, el)
+                    time.sleep(1.5)
+                    return True
+                except StaleElementReferenceException:
+                    time.sleep(0.5)
         time.sleep(0.3)
     return False
 
@@ -1019,40 +1087,62 @@ def exportar_para_excel(driver) -> None:
     """
     Fluxo:
       1) Escape (sair tela cheia se houver)
-      2) Desligar Editar + selecionar cubo ate Exportar aparecer
-      3) Clique NATIVO no botao toolbar Exportar (exportAction)
-      4) Menu/dialogo opcionais
+      2) Esperar dashboard estabilizar (views lentas como CUSTO)
+      3) Desligar Editar + selecionar cubo ate Exportar aparecer
+      4) Re-localizar o botao e clique NATIVO (retry se stale)
+      5) Menu/dialogo opcionais
     """
     log("Acionando exportacao para Excel (fluxo simples)...")
     driver.switch_to.default_content()
     sair_tela_cheia(driver)
+    # Reforca espera: Custos pode ainda estar montando a toolbar.
+    aguardar_dashboard_pronto(driver, timeout=60)
 
-    botao = garantir_toolbar_exportacao(driver, tentativas=4)
-    if botao is None:
-        raise TimeoutException(
-            "Botao Exportar (exportAction) nao apareceu na toolbar apos selecionar o cubo."
-        )
+    ultimo_erro = None
+    for tentativa in range(1, 6):
+        try:
+            botao = garantir_toolbar_exportacao(driver, tentativas=4)
+            if botao is None:
+                raise TimeoutException(
+                    "Botao Exportar (exportAction) nao apareceu na toolbar apos selecionar o cubo."
+                )
+            # Re-busca imediatamente antes do clique (evita stale apos re-render).
+            time.sleep(0.8)
+            botao = achar_botao_exportar_planilha(driver, timeout=8) or botao
+            label = (botao.get_attribute("aria-label") or botao.get_attribute("title") or "").strip()
+            data_id = botao.get_attribute("data-id") or ""
+            log(f"Clique nativo em: {label or 'Exportar'} (data-id={data_id or '-'}) [tentativa {tentativa}]")
+            clicar_nativo(driver, botao)
+            time.sleep(2)
 
-    label = (botao.get_attribute("aria-label") or botao.get_attribute("title") or "").strip()
-    data_id = botao.get_attribute("data-id") or ""
-    log(f"Clique nativo em: {label or 'Exportar'} (data-id={data_id or '-'})")
-    clicar_nativo(driver, botao)
-    time.sleep(2)
+            if clicar_opcao_menu_planilha(driver, timeout=2):
+                time.sleep(1)
 
-    # Menu dropdown opcional (raro: o proprio botao ja e 'Exportar para planilha').
-    if clicar_opcao_menu_planilha(driver, timeout=2):
-        time.sleep(1)
+            try:
+                confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=4)
+                if (confirmar.get_attribute("data-id") or "") != "exportAction":
+                    log("Confirmando dialogo de exportacao...")
+                    clicar_nativo(driver, confirmar)
+                    time.sleep(1)
+            except TimeoutException:
+                pass
 
-    # Dialogo opcional de confirmacao (nao confundir com o botao da toolbar).
-    try:
-        confirmar = achar_elemento(driver, "confirmar_exportacao", timeout=4)
-        if (confirmar.get_attribute("data-id") or "") != "exportAction":
-            log("Confirmando dialogo de exportacao...")
-            clicar_nativo(driver, confirmar)
-            time.sleep(1)
-    except TimeoutException:
-        pass
-    log("Exportacao acionada; aguardando arquivo baixar.")
+            log("Exportacao acionada; aguardando arquivo baixar.")
+            return
+        except StaleElementReferenceException as e:
+            ultimo_erro = e
+            log(f"Elemento stale na tentativa {tentativa}/5 (pagina ainda carregando). Esperando...")
+            time.sleep(3)
+            aguardar_dashboard_pronto(driver, timeout=45)
+        except TimeoutException as e:
+            ultimo_erro = e
+            log(f"Exportar ainda nao disponivel (tentativa {tentativa}/5): {e}")
+            time.sleep(2)
+            aguardar_dashboard_pronto(driver, timeout=30)
+
+    raise TimeoutException(
+        f"Falha ao acionar Exportar apos retries. Ultimo erro: {ultimo_erro}"
+    )
 
 
 def aguardar_download(pasta: Path, arquivos_antes: set, timeout: int) -> Path:
@@ -1186,6 +1276,7 @@ def main() -> int:
                     pasta_debug=pasta_debug,
                     dashboard_id=job.get("dashboard_id"),
                     base_url=cfg["url"],
+                    timeout_dashboard=int(cfg.get("timeout_dashboard_segundos", 90)),
                 )
                 exportar_para_excel(driver)
                 arquivo = aguardar_download(
