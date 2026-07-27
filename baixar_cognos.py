@@ -35,6 +35,8 @@ from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
+from painel_status import ESTIMATIVA_PADRAO_SEG, PainelAcompanhamento
+
 BASE_DIR = Path(__file__).resolve().parent
 
 # ---------------------------------------------------------------------------
@@ -1279,20 +1281,28 @@ def main() -> int:
     else:
         log("Pasta de downloads NAO foi limpa (--nao-limpar).")
 
+    estimativa = int(cfg.get("tempo_estimado_por_exportacao_segundos", ESTIMATIVA_PADRAO_SEG))
+    painel = PainelAcompanhamento([j["nome"] for j in jobs], estimativa_padrao=estimativa)
+    painel.set_fase("login", "Abrindo Planning Analytics / aguardando login...")
+
     log(f"Iniciando automacao: {len(jobs)} exportacao(oes).")
-    driver = criar_driver(pasta_downloads)
+    driver = None
     resultados = []
+    houve_erro = False
     try:
+        driver = criar_driver(pasta_downloads)
         driver.get(cfg["url"])
         aguardar_login(
             driver,
             cfg["timeout_login_segundos"],
             arquivo_credenciais=cfg.get("arquivo_credenciais"),
         )
+        painel.set_fase("exportando", "Login concluido. Iniciando exportacoes...")
 
-        for job in jobs:
+        for idx, job in enumerate(jobs):
             log("=" * 60)
             log(f"Exportacao: {job['nome']}  (servidor {job['servidor']})")
+            painel.iniciar_job(idx, f"Exportando: {job['nome']}")
             try:
                 arquivos_antes = {p for p in pasta_downloads.iterdir() if p.is_file()}
                 pesquisar_e_abrir(
@@ -1311,16 +1321,19 @@ def main() -> int:
                 if args.sem_mover:
                     log(f"(--sem-mover) Arquivo mantido em: {arquivo}")
                     resultados.append((job["nome"], f"OK (download): {arquivo.name}"))
+                    painel.concluir_job(idx, "OK", arquivo.name)
                 else:
                     try:
                         mover_para_destino(arquivo, job, pasta_backup)
                         resultados.append((job["nome"], "OK"))
+                        painel.concluir_job(idx, "OK", "copiado para rede")
                     except FileNotFoundError as e_rede:
                         # Exportacao OK; so a copia para a rede falhou.
                         log(f"EXPORTACAO OK, mas falha ao mover para a rede: {e_rede}")
                         resultados.append(
                             (job["nome"], f"OK download; ERRO rede: {arquivo.name}")
                         )
+                        painel.concluir_job(idx, "OK_REDE", arquivo.name)
                         if args.debug:
                             salvar_debug(
                                 driver,
@@ -1334,6 +1347,7 @@ def main() -> int:
             except Exception as e:
                 log(f"ERRO em '{job['nome']}': {e}")
                 resultados.append((job["nome"], f"ERRO: {e}"))
+                painel.concluir_job(idx, "ERRO", str(e)[:80])
                 salvar_debug(
                     driver,
                     pasta_debug,
@@ -1350,12 +1364,19 @@ def main() -> int:
                 # Volta para a home para tentar a proxima exportacao.
                 driver.get(cfg["url"])
                 time.sleep(8)
+    except Exception as e:
+        log(f"ERRO fatal: {e}")
+        houve_erro = True
+        painel.set_fase("erro", str(e)[:120])
     finally:
-        driver.quit()
+        if driver is not None:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
     log("=" * 60)
     log("Resumo:")
-    houve_erro = False
     for nome, status in resultados:
         log(f"  {nome}: {status}")
         if status.startswith("ERRO") or "ERRO rede" in status:
@@ -1364,6 +1385,7 @@ def main() -> int:
         restantes = sorted(p.name for p in pasta_downloads.iterdir() if p.is_file())
         if restantes:
             log(f"Arquivos em downloads/: {', '.join(restantes)}")
+    painel.finalizar("Concluido com erros" if houve_erro else "Concluido com sucesso")
     return 1 if houve_erro else 0
 
 

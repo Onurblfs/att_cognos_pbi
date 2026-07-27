@@ -25,16 +25,22 @@ e salva cada arquivo na pasta de rede correspondente
 
 ## Como executar
 
-```powershell
-cd "C:\Users\n5919189\Base Cognos\automacao_cognos"
-& "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" baixar_cognos.py
+Duplo clique (recomendado):
+
+```text
+rodar_exportacoes.bat
 ```
 
-O Edge abrirá no site do Planning Analytics. Se aparecer a tela de login,
-**faça o login manualmente** — o script espera até 5 minutos e continua sozinho
-depois que a página inicial carregar.
+Abre um **painel** em outra janela com status de cada exportação, tempo gasto e ETA.
 
-Opções úteis:
+Ou via PowerShell:
+
+```powershell
+cd "C:\Users\n5919189\OneDrive - Claro SA\FINANCEIRO\Github\att_cognos_pbi"
+.\rodar_exportacoes.bat
+```
+
+Opções úteis direto no Python:
 
 ```powershell
 # Executa só uma exportação (filtra pelo nome)
