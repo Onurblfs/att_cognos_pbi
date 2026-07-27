@@ -459,6 +459,65 @@ def aguardar_login(
     raise TimeoutException("Tempo esgotado aguardando o login no Planning Analytics.")
 
 
+def extrair_dashboard_id(url: str) -> str | None:
+    """Extrai id=... da URL do dashboard, se houver."""
+    if "id=" not in (url or ""):
+        return None
+    parte = url.split("id=", 1)[1]
+    return parte.split("&", 1)[0].strip() or None
+
+
+def trecho_distintivo(nome_busca: str) -> str:
+    """Parte mais especifica do nome (ex.: CTS.100, REV.420, CUSTO, irat950)."""
+    nome = (nome_busca or "").strip()
+    if not nome:
+        return ""
+    primeiro = nome.split()[0]
+    if "." in primeiro and len(primeiro) >= 5:
+        return primeiro
+    if "(" in nome and nome.endswith(")"):
+        sufixo = nome[nome.rfind("(") + 1 : -1].strip()
+        if sufixo.lower() not in {"power bi", "tableau", "cognos"} and len(sufixo) >= 3:
+            return sufixo
+    # Ultima palavra distintiva (ex.: CUSTO).
+    partes = nome.replace("(", " ").replace(")", " ").split()
+    for p in reversed(partes):
+        if p.lower() not in {"power", "bi", "tableau", "dre", "receita", "v2"} and len(p) >= 3:
+            return p
+    return nome
+
+
+def validar_dashboard_aberto(driver, nome_busca: str) -> None:
+    """
+    Confirma que a view aberta corresponde ao nome_busca.
+    Evita exportar Tableau/outros tiles abertos por engano (caso Pre-Pago).
+    """
+    time.sleep(2)
+    title = (driver.title or "").strip()
+    url = driver.current_url or ""
+    did = extrair_dashboard_id(url)
+    if did:
+        log(f"Dashboard aberto: title='{title}' id={did}")
+    else:
+        log(f"Dashboard aberto: title='{title}'")
+
+    chave = trecho_distintivo(nome_busca).lower()
+    blob = f"{title} {url}".lower()
+    quer_pbi = "power bi" in nome_busca.lower()
+    if quer_pbi and "tableau" in title.lower():
+        raise TimeoutException(
+            f"Abriu view Tableau por engano ('{title}'), esperado: '{nome_busca}'. "
+            "Favorite a view correta ou informe o dashboard_id no config.json."
+        )
+    if chave and chave not in blob and chave not in title.lower():
+        # Title as vezes trunca; aceita se URL ja e dashboard e nome_busca quase bate.
+        if nome_busca.lower()[:20] not in title.lower() and chave not in title.lower():
+            raise TimeoutException(
+                f"View aberta nao confere. title='{title}' esperado conter '{chave}' "
+                f"(nome_busca='{nome_busca}'). id={did or '-'}."
+            )
+
+
 def abrir_por_tile(driver, nome_busca: str) -> bool:
     """
     Tenta abrir a view pelo tile ja presente na home (Favoritos/Recentes).
@@ -488,7 +547,10 @@ def abrir_por_tile(driver, nome_busca: str) -> bool:
                 try:
                     if not el.is_displayed():
                         continue
-                    log(f"Tile encontrado na home: {nome_busca}")
+                    titulo = (el.get_attribute("title") or el.text or "").strip()
+                    if "tableau" in titulo.lower() and "tableau" not in nome_busca.lower():
+                        continue
+                    log(f"Tile encontrado na home: {titulo or nome_busca}")
                     clicar(driver, el)
                     time.sleep(10)
                     return True
@@ -563,10 +625,12 @@ def pesquisar_e_abrir(
 
     if dashboard_id and base_url and abrir_por_dashboard_id(driver, base_url, dashboard_id):
         log("View aberta via dashboard_id.")
+        validar_dashboard_aberto(driver, nome_busca)
         return
 
     if abrir_por_tile(driver, nome_busca):
         log("View aberta via tile da home.")
+        validar_dashboard_aberto(driver, nome_busca)
         return
 
     log("Tile nao encontrado na home; indo para Compartilhado...")
@@ -599,9 +663,13 @@ def pesquisar_e_abrir(
     time.sleep(4)
 
     resultado = achar_resultado(driver, nome_busca, timeout=30)
-    clicar(driver, resultado)
+    try:
+        clicar_nativo(driver, resultado)
+    except Exception:
+        clicar(driver, resultado)
     log("View aberta via pesquisa no Compartilhado. Aguardando carregar...")
     time.sleep(10)
+    validar_dashboard_aberto(driver, nome_busca)
 
 
 def achar_resultado(driver, nome_busca: str, timeout: int = 30):
@@ -633,6 +701,7 @@ def achar_resultado(driver, nome_busca: str, timeout: int = 30):
         candidatos_xpath.append(f"//*[@title[contains(., {lit})] or @aria-label[contains(., {lit})]]")
 
     fim = time.time() + timeout
+    rejeita_tableau = "tableau" not in nome_busca.lower()
     while time.time() < fim:
         for xp in candidatos_xpath:
             els = driver.find_elements(By.XPATH, xp)
@@ -643,11 +712,14 @@ def achar_resultado(driver, nome_busca: str, timeout: int = 30):
                     # Ignora o proprio campo de busca / labels genericos.
                     if el.tag_name.lower() in {"input", "textarea", "html", "body"}:
                         continue
+                    combinado = f"{texto} {title}".lower()
+                    if rejeita_tableau and "tableau" in combinado:
+                        continue
                     if nome_busca.lower() in texto.lower() or nome_busca.lower() in title.lower():
                         if el.is_displayed():
                             log(f"Resultado encontrado: {texto or title}")
                             return el
-                    # Match por trecho curto distintivo (ex.: (irat950)) quando truncado.
+                    # Match por trecho curto distintivo (ex.: (irat950) / CTS.100) quando truncado.
                     for trecho in trechos[1:]:
                         if trecho.lower() in texto.lower() or trecho.lower() in title.lower():
                             if el.is_displayed() and len(texto) > 3:
@@ -711,12 +783,22 @@ def desligar_modo_editar(driver) -> None:
             for lab in driver.find_elements(By.CSS_SELECTOR, f"label[for='{tid}']"):
                 try:
                     if lab.is_displayed():
-                        lab.click()
+                        clicar_nativo(driver, lab)
                         time.sleep(2)
                         if not toggle.is_selected():
                             return
                 except Exception:
                     continue
+        # Clique no texto "Editar" ao lado do toggle.
+        for lab in driver.find_elements(By.XPATH, "//*[normalize-space(.)='Editar']/ancestor::label[1] | //label[.//text()[contains(.,'Editar')]]"):
+            try:
+                if lab.is_displayed():
+                    clicar_nativo(driver, lab)
+                    time.sleep(2)
+                    if not toggle.is_selected():
+                        return
+            except Exception:
+                continue
         driver.execute_script(
             "arguments[0].click();"
             "arguments[0].checked=false;"
@@ -740,34 +822,61 @@ def sair_tela_cheia(driver) -> None:
 
 
 def selecionar_cubo(driver) -> None:
-    """Um unico clique no texto do cabecalho do cubo (area segura, longe dos icones)."""
+    """
+    Seleciona o widget do cubo para a toolbar de exploracao (Exportar) aparecer.
+    No Custos o cabecalho 'Visualizacao do cubo' as vezes nao esta no DOM —
+    cai para clique na grade TM1 / overview.
+    """
     xpaths = [
         "//*[contains(@aria-label,'Visualização do cubo')]",
         "//*[contains(@aria-label,'Visualizacao do cubo')]",
+        "//*[contains(@title,'Visualização do cubo')]",
+        "//*[contains(@title,'Visualizacao do cubo')]",
         "//*[contains(normalize-space(.),'Visualização do cubo Banco de dados')]",
         "//*[contains(normalize-space(.),'Visualizacao do cubo Banco de dados')]",
         "//*[contains(normalize-space(.),'Banco de dados:') and contains(normalize-space(.),'Cubo:')]",
+        "//*[contains(@class,'pa--dimensionoverview--content')]",
+        "//*[contains(@id,'TM1MDVOverview')]",
+        "//*[contains(@class,'CubeView') or contains(@class,'cubeView')]",
+        "//*[contains(@id,'TM1MDV') and (@tabindex or contains(@class,'content'))]",
     ]
     for xp in xpaths:
         for el in driver.find_elements(By.XPATH, xp):
             try:
                 if not el.is_displayed():
                     continue
-                log("Selecionando cubo (clique no titulo)...")
+                log(f"Selecionando cubo via: {xp[:60]}...")
                 driver.execute_script("arguments[0].scrollIntoView({block:'center'});", el)
                 time.sleep(0.2)
-                # Clique nativo no proprio texto — nao usa offset nem canto direito.
-                el.click()
+                try:
+                    ActionChains(driver).move_to_element(el).pause(0.2).click().perform()
+                except Exception:
+                    try:
+                        el.click()
+                    except Exception:
+                        driver.execute_script("arguments[0].click();", el)
                 time.sleep(1.5)
                 return
             except Exception:
-                try:
-                    driver.execute_script("arguments[0].click();", el)
-                    time.sleep(1.5)
-                    return
-                except Exception:
-                    continue
-    log("Titulo do cubo nao encontrado para selecao.")
+                continue
+
+    # Ultimo recurso: clique no centro da area de conteudo.
+    try:
+        log("Selecionando cubo via clique no centro do conteudo...")
+        driver.execute_script(
+            """
+            const pane = document.querySelector('[aria-label*=\"contentViewPane\"], .contentViewPane, .dashboard-content, main')
+                       || document.body;
+            const r = pane.getBoundingClientRect();
+            const x = r.left + r.width * 0.55;
+            const y = r.top + r.height * 0.45;
+            const el = document.elementFromPoint(x, y);
+            if (el) el.click();
+            """
+        )
+        time.sleep(1.5)
+    except Exception:
+        log("Titulo/grade do cubo nao encontrado para selecao.")
 
 
 def achar_botao_exportar_planilha(driver, timeout: int = 12):
@@ -801,6 +910,40 @@ def achar_botao_exportar_planilha(driver, timeout: int = 12):
                 return el
         time.sleep(0.5)
     return None
+
+
+def garantir_toolbar_exportacao(driver, tentativas: int = 4):
+    """Desliga Editar, seleciona o cubo e espera o botao Exportar aparecer."""
+    botao = None
+    for i in range(1, tentativas + 1):
+        desligar_modo_editar(driver)
+        selecionar_cubo(driver)
+        botao = achar_botao_exportar_planilha(driver, timeout=8)
+        if botao is not None:
+            return botao
+        log(f"Toolbar Exportar ainda ausente (tentativa {i}/{tentativas}); selecionando de novo...")
+        # Clique extra na grade (Custos nao expoe o titulo do cubo).
+        try:
+            grade = driver.execute_script(
+                """
+                const cands = [
+                  ...document.querySelectorAll('[id*=\"TM1MDV\"]'),
+                  ...document.querySelectorAll('[class*=\"CubeView\"]'),
+                  ...document.querySelectorAll('[class*=\"pa--dimensionoverview\"]'),
+                ];
+                for (const el of cands) {
+                  const r = el.getBoundingClientRect();
+                  if (r.width > 80 && r.height > 40) return el;
+                }
+                return null;
+                """
+            )
+            if grade is not None:
+                ActionChains(driver).move_to_element(grade).pause(0.2).click().perform()
+                time.sleep(1.2)
+        except Exception:
+            pass
+    return botao
 
 
 def clicar_opcao_menu_planilha(driver, timeout: int = 3) -> bool:
@@ -876,21 +1019,15 @@ def exportar_para_excel(driver) -> None:
     """
     Fluxo:
       1) Escape (sair tela cheia se houver)
-      2) Desligar Editar
-      3) Clicar no titulo do cubo
-      4) Clique NATIVO no botao toolbar Exportar (exportAction)
-      5) Menu/dialogo opcionais
+      2) Desligar Editar + selecionar cubo ate Exportar aparecer
+      3) Clique NATIVO no botao toolbar Exportar (exportAction)
+      4) Menu/dialogo opcionais
     """
     log("Acionando exportacao para Excel (fluxo simples)...")
     driver.switch_to.default_content()
     sair_tela_cheia(driver)
-    desligar_modo_editar(driver)
-    selecionar_cubo(driver)
 
-    botao = achar_botao_exportar_planilha(driver, timeout=15)
-    if botao is None:
-        selecionar_cubo(driver)
-        botao = achar_botao_exportar_planilha(driver, timeout=10)
+    botao = garantir_toolbar_exportacao(driver, tentativas=4)
     if botao is None:
         raise TimeoutException(
             "Botao Exportar (exportAction) nao apareceu na toolbar apos selecionar o cubo."
