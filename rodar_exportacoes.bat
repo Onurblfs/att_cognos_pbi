@@ -60,7 +60,7 @@ if "%ESCOPO%"=="1" (
 )
 
 echo.
-echo Copiar os arquivos para a pasta de rede \\10.29.2.2\... ?
+echo Copiar os arquivos para a pasta de rede \\CBL1CM68919\... ?
 echo   S^) Sim ^(copia para a rede^)
 echo   N^) Nao ^(so download local em downloads\^)
 echo.

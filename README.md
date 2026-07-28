@@ -3,7 +3,7 @@
 Automatiza a etapa de **atualização das bases** do relatório Power BI
 "Orçamento e Forecast Gerencial": baixa as 6 exportações do Planning Analytics
 e salva cada arquivo na pasta de rede correspondente
-(`\\10.29.2.2\Planejamento\...`), fazendo backup local do arquivo anterior.
+(`\\CBL1CM68919\Planejamento\...`), fazendo backup local do arquivo anterior.
 
 ## Exportações configuradas (config.json)
 
@@ -18,7 +18,7 @@ e salva cada arquivo na pasta de rede correspondente
 
 ## Pré-requisitos
 
-- Conectado à **rede corporativa / VPN** (para acessar o Cognos e a pasta `\\10.29.2.2`).
+- Conectado à **rede corporativa / VPN** (para acessar o Cognos e a pasta `\\CBL1CM68919`).
 - Python 3.12 (já instalado em `%LOCALAPPDATA%\Programs\Python\Python312`).
 - Microsoft Edge instalado (o Selenium baixa o driver automaticamente).
 - Dependências: `python -m pip install -r requirements.txt`
