@@ -12,7 +12,7 @@ e salva cada arquivo na pasta de rede correspondente
 | Receitas | Sdata ACOMPANHAMENTO | Receita DRE PowerBI V2 (irat950) | ...\IRAT.950 |
 | Físicos | Sdata ACOMPANHAMENTO | Fisico Receita - FIS 900 (Power BI) | ...\FIS.900 |
 | Custos | Sdata ACOMPANHAMENTO | Receita DRE PowerBI V2 (irat950) CUSTO | ...\IRAT.950_Custo |
-| Abertura Receita (Waterfall) | NET_PLAN_UF | REV.900.Receita_Consolidada_DRE Power BI | ...\REC.900 - Receita Abertura (PROVISORIO) |
+| Abertura Receita (Waterfall) | NET_PLAN_UF | REV.900.Receita_Consolidada_DRE Power BI | ...\REC.900 - Receita Abertura (PROVISÓRIO) |
 | Pré-Pago Parte 1 | NET_PLAN_UF | CTS.100 (Power BI) | ...\CTS.100 |
 | Pré-Pago Parte 2 | NET_PLAN_UF | REV.420 Power BI | ...\REV.420 |
 
