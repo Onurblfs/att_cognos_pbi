@@ -28,7 +28,7 @@ e salva cada arquivo na pasta de rede correspondente
 Duplo clique (recomendado):
 
 ```text
-rodar_exportacoes.bat
+PLAY ME.bat
 ```
 
 Abre um **painel** em outra janela com status de cada exportação, tempo gasto e ETA.
@@ -37,7 +37,7 @@ Ou via PowerShell:
 
 ```powershell
 cd "C:\Users\n5919189\OneDrive - Claro SA\FINANCEIRO\Github\att_cognos_pbi"
-.\rodar_exportacoes.bat
+.\PLAY ME.bat
 ```
 
 Opções úteis direto no Python:
