@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal EnableExtensions EnableDelayedExpansion
-title Cognos PBI - Exportacoes
+title PLAY ME - Cognos PBI Exportacoes
 cd /d "%~dp0"
 
 echo.
