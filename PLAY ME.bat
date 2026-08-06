@@ -84,14 +84,6 @@ if defined MOVER_ARG (
 echo   Comando:   baixar_cognos.py %ARGS%
 echo ------------------------------------------------------------------------
 echo.
-set /p "CONF=Confirmar e iniciar? [S/N]: "
-if /i not "%CONF%"=="S" if /i not "%CONF%"=="SIM" (
-  echo Cancelado.
-  pause
-  exit /b 0
-)
-
-echo.
 echo Iniciando painel de acompanhamento em outra janela...
 start "Painel Cognos PBI" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0painel.ps1"
 
