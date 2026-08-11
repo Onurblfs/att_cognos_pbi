@@ -50,6 +50,22 @@ python baixar_cognos.py --somente "FIS.900"
 python baixar_cognos.py --sem-mover
 ```
 
+## Correção do separador decimal (ponto x vírgula)
+
+O Planning Analytics pode exportar os números como **texto em formato
+brasileiro** (ex.: `1.234,56`), o que quebra a leitura no Power BI (que espera
+ponto decimal). Por isso, após cada download o script abre o `.xlsx` e converte
+esses textos em **números reais** (`1234.56`) antes de copiar para a rede:
+
+- Só converte células de texto que batem com o padrão numérico brasileiro
+  (`1.234,56`, `-0,5` etc.). Células que já são número não são alteradas.
+- Inteiros com separador de milhar (`1.234`) só são convertidos em colunas
+  comprovadamente numéricas (que já têm algum número real ou valor com
+  vírgula decimal) — assim códigos/rótulos parecidos com número
+  (ex.: conta `1.100`) não são tocados.
+- Para desligar esse comportamento, defina `"corrigir_decimal": false` no
+  `config.json`.
+
 ## Pontos de atenção (do documento original)
 
 - O **nome do arquivo** e o **nome da aba** do Excel devem ser idênticos aos dos
