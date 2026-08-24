@@ -3,7 +3,7 @@
 Automatiza a etapa de **atualização das bases** do relatório Power BI
 "Orçamento e Forecast Gerencial": baixa as 6 exportações do Planning Analytics
 e salva cada arquivo na pasta de rede correspondente
-(`\\10.29.2.2\Planejamento\...`), fazendo backup local do arquivo anterior.
+(`\\CBL1CM68919\Planejamento\...`), fazendo backup local do arquivo anterior.
 
 ## Exportações configuradas (config.json)
 
@@ -12,13 +12,13 @@ e salva cada arquivo na pasta de rede correspondente
 | Receitas | Sdata ACOMPANHAMENTO | Receita DRE PowerBI V2 (irat950) | ...\IRAT.950 |
 | Físicos | Sdata ACOMPANHAMENTO | Fisico Receita - FIS 900 (Power BI) | ...\FIS.900 |
 | Custos | Sdata ACOMPANHAMENTO | Receita DRE PowerBI V2 (irat950) CUSTO | ...\IRAT.950_Custo |
-| Abertura Receita (Waterfall) | NET_PLAN_UF | REV.900.Receita_Consolidada_DRE Power BI | ...\REC.900 - Receita Abertura (PROVISORIO) |
+| Abertura Receita (Waterfall) | NET_PLAN_UF | REV.900.Receita_Consolidada_DRE Power BI | ...\REC.900 - Receita Abertura (PROVISÓRIO) |
 | Pré-Pago Parte 1 | NET_PLAN_UF | CTS.100 (Power BI) | ...\CTS.100 |
 | Pré-Pago Parte 2 | NET_PLAN_UF | REV.420 Power BI | ...\REV.420 |
 
 ## Pré-requisitos
 
-- Conectado à **rede corporativa / VPN** (para acessar o Cognos e a pasta `\\10.29.2.2`).
+- Conectado à **rede corporativa / VPN** (para acessar o Cognos e a pasta `\\CBL1CM68919`).
 - Python 3.12 (já instalado em `%LOCALAPPDATA%\Programs\Python\Python312`).
 - Microsoft Edge instalado (o Selenium baixa o driver automaticamente).
 - Dependências: `python -m pip install -r requirements.txt`
@@ -28,7 +28,7 @@ e salva cada arquivo na pasta de rede correspondente
 Duplo clique (recomendado):
 
 ```text
-rodar_exportacoes.bat
+PLAY ME.bat
 ```
 
 Abre um **painel** em outra janela com status de cada exportação, tempo gasto e ETA.
@@ -37,7 +37,7 @@ Ou via PowerShell:
 
 ```powershell
 cd "C:\Users\n5919189\OneDrive - Claro SA\FINANCEIRO\Github\att_cognos_pbi"
-.\rodar_exportacoes.bat
+.\PLAY ME.bat
 ```
 
 Opções úteis direto no Python:

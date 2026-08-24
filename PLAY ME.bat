@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal EnableExtensions EnableDelayedExpansion
-title Cognos PBI - Exportacoes
+title PLAY ME - Cognos PBI Exportacoes
 cd /d "%~dp0"
 
 echo.
@@ -32,9 +32,9 @@ echo.
 
 echo O que deseja atualizar?
 echo.
-echo   1^) Receita  = Receita DRE PowerBI V2 ^(irat950^)
-echo   2^) Fisico   = Fisico Receita - FIS 900 ^(Power BI^)
-echo   3^) Receita + Fisico
+echo   1^) So Receita  = Receita DRE PowerBI V2 ^(irat950^)
+echo   2^) Receita + Fisico
+echo   3^) So Fisico   = Fisico Receita - FIS 900 ^(Power BI^)
 echo   0^) Tudo ^(as 6 exportacoes^)
 echo.
 set /p "ESCOPO=Opcao: "
@@ -45,11 +45,11 @@ if "%ESCOPO%"=="1" (
   set "FILTRO=--somente Receitas"
   set "DESC=Receita DRE PowerBI V2 (irat950)"
 ) else if "%ESCOPO%"=="2" (
-  set "FILTRO=--somente Fisicos"
-  set "DESC=Fisico Receita - FIS 900 (Power BI)"
-) else if "%ESCOPO%"=="3" (
   set "FILTRO=--somente Receitas,Fisicos"
   set "DESC=Receita + Fisico"
+) else if "%ESCOPO%"=="3" (
+  set "FILTRO=--somente Fisicos"
+  set "DESC=Fisico Receita - FIS 900 (Power BI)"
 ) else if "%ESCOPO%"=="0" (
   set "FILTRO="
   set "DESC=Todas as exportacoes"
@@ -60,7 +60,7 @@ if "%ESCOPO%"=="1" (
 )
 
 echo.
-echo Copiar os arquivos para a pasta de rede \\10.29.2.2\... ?
+echo Copiar os arquivos para a pasta de rede \\CBL1CM68919\... ?
 echo   S^) Sim ^(copia para a rede^)
 echo   N^) Nao ^(so download local em downloads\^)
 echo.
@@ -83,14 +83,6 @@ if defined MOVER_ARG (
 )
 echo   Comando:   baixar_cognos.py %ARGS%
 echo ------------------------------------------------------------------------
-echo.
-set /p "CONF=Confirmar e iniciar? [S/N]: "
-if /i not "%CONF%"=="S" if /i not "%CONF%"=="SIM" (
-  echo Cancelado.
-  pause
-  exit /b 0
-)
-
 echo.
 echo Iniciando painel de acompanhamento em outra janela...
 start "Painel Cognos PBI" powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0painel.ps1"
