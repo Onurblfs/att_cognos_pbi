@@ -15,7 +15,7 @@
       "nome_busca": "Receita DRE PowerBI V2 (irat950)",
       "dashboard_id": "ed603f59-a5a5-4586-a44f-477a79e8b2dc",
       "pasta_destino": "\\\\CBL1CM68919\\Planejamento\\Planejamento e Controle\\00_Simulador Receita\\ANALÍTICOS MÓVEL\\FORECAST IRAT.950 + FIS.900\\IRAT.950",
-      "nome_arquivo_destino": "Receita DRE PowerBI V2 (irat950).xlsx"
+      "nome_arquivo_destino": "Receita_irat950.xlsx"
     },
     {
       "nome": "Fisicos (FIS.900)",
@@ -24,7 +24,7 @@
       "nome_busca": "Fisico Receita - FIS 900 (Power BI)",
       "dashboard_id": "5f46efed-d3f0-4e40-a568-ea6df650c883",
       "pasta_destino": "\\\\CBL1CM68919\\Planejamento\\Planejamento e Controle\\00_Simulador Receita\\ANALÍTICOS MÓVEL\\FORECAST IRAT.950 + FIS.900\\FIS.900",
-      "nome_arquivo_destino": "Fisico Receita - FIS 900 (Power BI).xlsx"
+      "nome_arquivo_destino": "Fisico Receita - FIS 900.xlsx"
     },
     {
       "nome": "Custos (IRAT.950 Custo)",
