@@ -32,9 +32,9 @@ echo.
 
 echo O que deseja atualizar?
 echo.
-echo   1^) Receita  = Receita DRE PowerBI V2 ^(irat950^)
-echo   2^) Fisico   = Fisico Receita - FIS 900 ^(Power BI^)
-echo   3^) Receita + Fisico
+echo   1^) So Receita  = Receita DRE PowerBI V2 ^(irat950^)
+echo   2^) Receita + Fisico
+echo   3^) So Fisico   = Fisico Receita - FIS 900 ^(Power BI^)
 echo   0^) Tudo ^(as 6 exportacoes^)
 echo.
 set /p "ESCOPO=Opcao: "
@@ -45,11 +45,11 @@ if "%ESCOPO%"=="1" (
   set "FILTRO=--somente Receitas"
   set "DESC=Receita DRE PowerBI V2 (irat950)"
 ) else if "%ESCOPO%"=="2" (
-  set "FILTRO=--somente Fisicos"
-  set "DESC=Fisico Receita - FIS 900 (Power BI)"
-) else if "%ESCOPO%"=="3" (
   set "FILTRO=--somente Receitas,Fisicos"
   set "DESC=Receita + Fisico"
+) else if "%ESCOPO%"=="3" (
+  set "FILTRO=--somente Fisicos"
+  set "DESC=Fisico Receita - FIS 900 (Power BI)"
 ) else if "%ESCOPO%"=="0" (
   set "FILTRO="
   set "DESC=Todas as exportacoes"
