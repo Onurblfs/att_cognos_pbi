@@ -365,6 +365,8 @@ def salvar_debug(driver, pasta: Path, rotulo: str, erro: str | None = None) -> P
 def carregar_credenciais(caminho: str | Path | None) -> tuple[str, str] | None:
     """
     Le arquivo de credenciais: 1a linha = login, 2a linha = senha.
+    Se houver linhas extras, usa a ULTIMA linha nao vazia como senha
+    (caso a senha nova tenha sido acrescentada abaixo da antiga).
     Nunca imprime a senha.
     """
     if not caminho:
@@ -383,9 +385,42 @@ def carregar_credenciais(caminho: str | Path | None) -> tuple[str, str] | None:
             f"Arquivo de credenciais invalido ({path}). "
             "Esperado: 1a linha login, 2a linha senha."
         )
-    usuario, senha = linhas[0], linhas[1]
-    log(f"Credenciais carregadas para usuario: {usuario}")
+    usuario = linhas[0]
+    senha = linhas[-1]
+    if len(linhas) > 2:
+        log(
+            f"AVISO: {path} tem {len(linhas)} linhas preenchidas. "
+            "Usando a 1a como login e a ULTIMA como senha. "
+            "Deixe so 2 linhas (login e senha) para evitar confusao."
+        )
+    log(f"Credenciais carregadas de: {path} (usuario: {usuario})")
     return usuario, senha
+
+
+def preencher_campo(driver, campo, valor: str) -> None:
+    """Substitui o valor do campo (clear() sozinho falha em varios formularios)."""
+    try:
+        campo.click()
+    except Exception:
+        pass
+    try:
+        campo.send_keys(Keys.CONTROL, "a")
+        campo.send_keys(Keys.DELETE)
+    except Exception:
+        pass
+    try:
+        campo.clear()
+    except Exception:
+        pass
+    try:
+        driver.execute_script(
+            "arguments[0].value = '';"
+            "arguments[0].dispatchEvent(new Event('input', {bubbles: true}));",
+            campo,
+        )
+    except Exception:
+        pass
+    campo.send_keys(valor)
 
 
 def home_ja_carregada(driver) -> bool:
@@ -412,17 +447,9 @@ def fazer_login(driver, usuario: str, senha: str, timeout: int = 60) -> bool:
             continue
 
         log("Tela de login detectada; preenchendo credenciais...")
-        try:
-            campo_user.clear()
-        except Exception:
-            pass
-        campo_user.send_keys(usuario)
+        preencher_campo(driver, campo_user, usuario)
         time.sleep(0.3)
-        try:
-            campo_pass.clear()
-        except Exception:
-            pass
-        campo_pass.send_keys(senha)
+        preencher_campo(driver, campo_pass, senha)
         time.sleep(0.3)
         try:
             botao = achar_elemento(driver, "botao_login", timeout=5)
