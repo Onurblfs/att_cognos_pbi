@@ -21,10 +21,8 @@ Uso:
 
 import argparse
 import json
-import os
 import shutil
 import sys
-import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -184,21 +182,14 @@ def carregar_config(caminho: Path) -> dict:
 
 
 def criar_driver(pasta_downloads: Path) -> webdriver.Edge:
-    perfil = Path(tempfile.mkdtemp(prefix="cognos_edge_"))
     opcoes = webdriver.EdgeOptions()
     opcoes.set_capability("acceptInsecureCerts", True)  # certificado corporativo autoassinado
     opcoes.add_experimental_option("prefs", {
         "download.default_directory": str(pasta_downloads),
         "download.prompt_for_download": False,
         "safebrowsing.enabled": True,
-        "credentials_enable_service": False,
-        "profile.password_manager_enabled": False,
-        "profile.password_manager_leak_detection": False,
-        "autofill.profile_enabled": False,
     })
-    opcoes.add_argument(f"--user-data-dir={perfil}")
     opcoes.add_argument("--start-maximized")
-    log(f"Edge com perfil temporario (sem senhas salvas): {perfil}")
     return webdriver.Edge(options=opcoes)
 
 
@@ -371,97 +362,14 @@ def salvar_debug(driver, pasta: Path, rotulo: str, erro: str | None = None) -> P
     return base
 
 
-def _chave_arquivo(path: Path) -> str:
-    try:
-        return str(path.resolve()).lower()
-    except Exception:
-        return str(path).lower()
-
-
-def candidatos_credenciais(caminho_config: str | Path | None) -> list[Path]:
-    """Locais comuns do acess.txt (projeto, Desktop local e Area de Trabalho do OneDrive)."""
-    nomes = ("acess.txt", "access.txt", "acess.txt.txt", "access.txt.txt")
-    bases = [BASE_DIR]
-    if caminho_config:
-        cfg = Path(str(caminho_config).strip()).expanduser()
-        bases.append(cfg.parent)
-    home = Path.home()
-    bases.extend(
-        [
-            home / "Desktop",
-            home / "Área de Trabalho",
-            home / "OneDrive - Claro SA" / "Área de Trabalho",
-            home / "OneDrive - Claro SA" / "Desktop",
-            home / "OneDrive" / "Área de Trabalho",
-            home / "OneDrive" / "Desktop",
-        ]
-    )
-    for env in ("OneDriveCommercial", "OneDrive", "USERPROFILE"):
-        valor = os.environ.get(env)
-        if not valor:
-            continue
-        raiz = Path(valor)
-        bases.extend([raiz / "Área de Trabalho", raiz / "Desktop"])
-
-    saida: list[Path] = []
-    vistos: set[str] = set()
-    if caminho_config:
-        cfg_path = Path(str(caminho_config).strip()).expanduser()
-        saida.append(cfg_path)
-        vistos.add(_chave_arquivo(cfg_path))
-    for base in bases:
-        for nome in nomes:
-            candidato = base / nome
-            chave = _chave_arquivo(candidato)
-            if chave in vistos:
-                continue
-            vistos.add(chave)
-            saida.append(candidato)
-    return saida
-
-
-def resolver_arquivo_credenciais(caminho_config: str | Path | None) -> Path | None:
-    """
-    Escolhe o acess.txt mais recentemente salvo entre o caminho do config
-    e copias na Area de Trabalho / Desktop / pasta do projeto.
-    """
-    existentes: list[tuple[float, Path]] = []
-    for path in candidatos_credenciais(caminho_config):
-        if not path.is_file():
-            continue
-        mtime = path.stat().st_mtime
-        existentes.append((mtime, path))
-        log(
-            f"Arquivo de credenciais encontrado: {path} "
-            f"(alterado em {datetime.fromtimestamp(mtime):%d/%m/%Y %H:%M:%S})"
-        )
-    if not existentes:
-        return Path(str(caminho_config).strip()).expanduser() if caminho_config else None
-
-    existentes.sort(key=lambda item: item[0], reverse=True)
-    escolhido = existentes[0][1]
-    if caminho_config:
-        cfg_path = Path(str(caminho_config).strip()).expanduser()
-        try:
-            mesmo = cfg_path.exists() and cfg_path.resolve() == escolhido.resolve()
-        except Exception:
-            mesmo = str(cfg_path) == str(escolhido)
-        if not mesmo:
-            log(
-                f"AVISO: config.json aponta para {cfg_path}, "
-                f"mas vou usar o arquivo mais recente: {escolhido}"
-            )
-    return escolhido
-
-
 def carregar_credenciais(caminho: str | Path | None) -> tuple[str, str] | None:
     """
-    Le arquivo de credenciais: 1a linha = login, ultima linha = senha.
+    Le arquivo de credenciais: 1a linha = login, 2a linha = senha.
     Nunca imprime a senha.
     """
-    path = resolver_arquivo_credenciais(caminho)
-    if not path:
+    if not caminho:
         return None
+    path = Path(caminho).expanduser()
     if not path.exists():
         log(f"Arquivo de credenciais nao encontrado: {path}")
         return None
@@ -475,59 +383,9 @@ def carregar_credenciais(caminho: str | Path | None) -> tuple[str, str] | None:
             f"Arquivo de credenciais invalido ({path}). "
             "Esperado: 1a linha login, 2a linha senha."
         )
-    usuario = linhas[0]
-    senha = linhas[-1]
-    if len(linhas) > 2:
-        log(
-            f"AVISO: {path} tem {len(linhas)} linhas preenchidas. "
-            "Usando a 1a como login e a ULTIMA como senha. "
-            "Deixe so 2 linhas (login e senha) para evitar confusao."
-        )
-    log(
-        f"Credenciais carregadas de: {path} "
-        f"(usuario: {usuario}; senha com {len(senha)} caracteres)"
-    )
+    usuario, senha = linhas[0], linhas[1]
+    log(f"Credenciais carregadas para usuario: {usuario}")
     return usuario, senha
-
-
-def preencher_campo(driver, campo, valor: str) -> None:
-    """Substitui o valor do campo, ignorando autofill do navegador."""
-    try:
-        campo.click()
-    except Exception:
-        pass
-    try:
-        driver.execute_script(
-            """
-            const el = arguments[0];
-            const valor = arguments[1];
-            el.removeAttribute('readonly');
-            el.setAttribute('autocomplete', 'off');
-            el.focus();
-            const proto = el.constructor && el.constructor.prototype
-                ? el.constructor.prototype
-                : HTMLInputElement.prototype;
-            const desc = Object.getOwnPropertyDescriptor(proto, 'value')
-                || Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
-            if (desc && desc.set) { desc.set.call(el, valor); }
-            else { el.value = valor; }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            """,
-            campo,
-            valor,
-        )
-    except Exception:
-        try:
-            campo.send_keys(Keys.CONTROL, "a")
-            campo.send_keys(Keys.DELETE)
-        except Exception:
-            pass
-        try:
-            campo.clear()
-        except Exception:
-            pass
-        campo.send_keys(valor)
 
 
 def home_ja_carregada(driver) -> bool:
@@ -554,9 +412,17 @@ def fazer_login(driver, usuario: str, senha: str, timeout: int = 60) -> bool:
             continue
 
         log("Tela de login detectada; preenchendo credenciais...")
-        preencher_campo(driver, campo_user, usuario)
+        try:
+            campo_user.clear()
+        except Exception:
+            pass
+        campo_user.send_keys(usuario)
         time.sleep(0.3)
-        preencher_campo(driver, campo_pass, senha)
+        try:
+            campo_pass.clear()
+        except Exception:
+            pass
+        campo_pass.send_keys(senha)
         time.sleep(0.3)
         try:
             botao = achar_elemento(driver, "botao_login", timeout=5)
@@ -1395,8 +1261,6 @@ def main() -> int:
                         help="Salva screenshot/HTML/inputs quando falhar e para no 1o erro.")
     parser.add_argument("--nao-limpar", action="store_true",
                         help="Nao limpa a pasta downloads antes de comecar.")
-    parser.add_argument("--credenciais", default=None,
-                        help="Caminho do acess.txt (login na 1a linha, senha na 2a).")
     args = parser.parse_args()
 
     cfg = carregar_config(Path(args.config))
@@ -1439,7 +1303,7 @@ def main() -> int:
         aguardar_login(
             driver,
             cfg["timeout_login_segundos"],
-            arquivo_credenciais=args.credenciais or cfg.get("arquivo_credenciais"),
+            arquivo_credenciais=cfg.get("arquivo_credenciais"),
         )
         painel.set_fase("exportando", "Login concluido. Iniciando exportacoes...")
 
