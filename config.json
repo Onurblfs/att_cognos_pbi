@@ -7,6 +7,7 @@
   "timeout_download_segundos": 600,
   "timeout_dashboard_segundos": 120,
   "tempo_estimado_por_exportacao_segundos": 180,
+  "corrigir_decimal": true,
   "exportacoes": [
     {
       "nome": "Receitas (IRAT.950)",

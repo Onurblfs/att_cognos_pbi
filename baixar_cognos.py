@@ -21,6 +21,7 @@ Uso:
 
 import argparse
 import json
+import re
 import shutil
 import sys
 import time
@@ -170,6 +171,12 @@ SELETORES = {
 }
 
 EXTENSOES_VALIDAS = {".xlsx", ".xls", ".csv"}
+
+# Numeros em formato brasileiro exportados como TEXTO pelo PA
+# (ex.: "1.234,56", "-0,5"). O Power BI espera ponto decimal.
+RE_NUM_DECIMAL_VIRGULA = re.compile(r"^-?(?:\d{1,3}(?:\.\d{3})+|\d+),\d+$")
+RE_NUM_MILHAR_PONTO = re.compile(r"^-?\d{1,3}(?:\.\d{3})+$")
+RE_NUM_INTEIRO = re.compile(r"^-?\d+$")
 
 
 def log(msg: str) -> None:
@@ -1223,6 +1230,70 @@ def renomear_download(arquivo: Path, job: dict) -> Path:
     return destino
 
 
+def corrigir_decimal_excel(arquivo: Path) -> int:
+    """
+    Corrige numeros exportados como TEXTO em formato brasileiro
+    ("1.234,56") convertendo-os para numeros reais (1234.56) no proprio
+    arquivo .xlsx. Celulas que ja sao numericas nao sao alteradas.
+
+    So mexe em colunas onde ha pelo menos um valor com virgula decimal,
+    para nao converter codigos/rotulos parecidos com numero (ex.: "1.100").
+    Retorna a quantidade de celulas convertidas.
+    """
+    if arquivo.suffix.lower() != ".xlsx":
+        log(f"Correcao de decimal ignorada (so .xlsx): {arquivo.name}")
+        return 0
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        log("openpyxl nao instalado; correcao de decimal ignorada. "
+            "Rode: python -m pip install -r requirements.txt")
+        return 0
+
+    wb = load_workbook(arquivo)
+    convertidos = 0
+    for ws in wb.worksheets:
+        # 1a passada: colunas comprovadamente numericas — contem celula ja
+        # numerica ou texto com virgula decimal ("1.234,56").
+        colunas_numericas = set()
+        for row in ws.iter_rows():
+            for cell in row:
+                valor = cell.value
+                if isinstance(valor, bool):
+                    continue
+                if isinstance(valor, (int, float)):
+                    colunas_numericas.add(cell.column)
+                elif isinstance(valor, str) and RE_NUM_DECIMAL_VIRGULA.match(valor.strip()):
+                    colunas_numericas.add(cell.column)
+
+        # 2a passada: converte os textos numericos.
+        for row in ws.iter_rows():
+            for cell in row:
+                valor = cell.value
+                if not isinstance(valor, str):
+                    continue
+                texto = valor.strip()
+                if RE_NUM_DECIMAL_VIRGULA.match(texto):
+                    cell.value = float(texto.replace(".", "").replace(",", "."))
+                    convertidos += 1
+                elif cell.column in colunas_numericas:
+                    # Na mesma coluna, inteiros com/sem separador de milhar
+                    # tambem viram numero (mantem a coluna homogenea).
+                    if RE_NUM_MILHAR_PONTO.match(texto):
+                        cell.value = int(texto.replace(".", ""))
+                        convertidos += 1
+                    elif RE_NUM_INTEIRO.match(texto):
+                        cell.value = int(texto)
+                        convertidos += 1
+
+    if convertidos:
+        wb.save(arquivo)
+        log(f"Separador decimal corrigido: {convertidos} celula(s) convertida(s) em {arquivo.name}")
+    else:
+        log(f"Nenhum numero em texto com virgula encontrado em {arquivo.name} (nada a corrigir).")
+    return convertidos
+
+
 def mover_para_destino(arquivo: Path, job: dict, pasta_backup: Path) -> Path:
     """Move o arquivo baixado para a pasta de rede, com backup do anterior."""
     destino_dir = Path(job["pasta_destino"])
@@ -1326,6 +1397,11 @@ def main() -> int:
                     pasta_downloads, arquivos_antes, cfg["timeout_download_segundos"]
                 )
                 arquivo = renomear_download(arquivo, job)
+                if cfg.get("corrigir_decimal", True):
+                    try:
+                        corrigir_decimal_excel(arquivo)
+                    except Exception as e_dec:
+                        log(f"Falha ao corrigir separador decimal (arquivo mantido como baixado): {e_dec}")
                 if args.sem_mover:
                     log(f"(--sem-mover) Arquivo mantido em: {arquivo}")
                     resultados.append((job["nome"], f"OK (download): {arquivo.name}"))
